@@ -23,7 +23,7 @@ All implementation details have been defined in the design phase.
 |-------|------|-------------|------|---------|---------|
 | Phase 1: Plugin Scaffold | 2 | 0 | 0 | 0 | [Details](phase-1/) @phase-1/ |
 | Phase 2: Core Implementation | 3 | 0 | 0 | 0 | [Details](phase-2/) @phase-2/ |
-| Phase 3: Distribution | 1 | 0 | 1 | 0 | [Details](phase-3/) @phase-3/ |
+| Phase 3: Distribution | 1 | 0 | 0 | 1 | [Details](phase-3/) @phase-3/ |
 
 ## Task List
 
@@ -32,25 +32,25 @@ All implementation details have been defined in the design phase.
 
 | Task ID | Title | Status | Depends | Est. | Details |
 |---------|-------|--------|---------|------|---------|
-| TASK-001 | Plugin metadata and directory structure | TODO | - | 5min | [Details](phase-1/TASK-001.md) @phase-1/TASK-001.md |
-| TASK-002 | LICENSE and README | TODO | - | 5min | [Details](phase-1/TASK-002.md) @phase-1/TASK-002.md |
+| TASK-001 | Plugin metadata and directory structure | DONE | - | 5min | [Details](phase-1/TASK-001.md) @phase-1/TASK-001.md |
+| TASK-002 | LICENSE and README | DONE | - | 5min | [Details](phase-1/TASK-002.md) @phase-1/TASK-002.md |
 
 ### Phase 2: Core Implementation
 *Estimated: 25 min*
 
 | Task ID | Title | Status | Depends | Est. | Details |
 |---------|-------|--------|---------|------|---------|
-| TASK-003 | Wrapper script (ccorch-wrapper.sh) | TODO | TASK-001 | 10min | [Details](phase-2/TASK-003.md) @phase-2/TASK-003.md |
-| TASK-004 | SKILL.md (/ccor skill definition) | TODO | TASK-003 | 10min | [Details](phase-2/TASK-004.md) @phase-2/TASK-004.md |
-| TASK-005 | System prompt templates | TODO | TASK-004 | 5min | [Details](phase-2/TASK-005.md) @phase-2/TASK-005.md |
+| TASK-003 | Wrapper script (ccorch-wrapper.sh) | DONE | TASK-001 | 10min | [Details](phase-2/TASK-003.md) @phase-2/TASK-003.md |
+| TASK-004 | SKILL.md (/ccor skill definition) | DONE | TASK-003 | 10min | [Details](phase-2/TASK-004.md) @phase-2/TASK-004.md |
+| TASK-005 | System prompt templates | DONE | TASK-004 | 5min | [Details](phase-2/TASK-005.md) @phase-2/TASK-005.md |
 
 ### Phase 3: Distribution
 *Estimated: 10 min*
 
 | Task ID | Title | Status | Depends | Est. | Details |
 |---------|-------|--------|---------|------|---------|
-| TASK-006 | Marketplace registration | TODO | Phase 2 | 5min | [Details](phase-3/TASK-006.md) @phase-3/TASK-006.md |
-| TASK-007 | Integration smoke test | TODO | TASK-006 | 5min | [Details](phase-3/TASK-007.md) @phase-3/TASK-007.md |
+| TASK-006 | Marketplace registration | DONE | Phase 2 | 5min | [Details](phase-3/TASK-006.md) @phase-3/TASK-006.md |
+| TASK-007 | Integration smoke test | BLOCKED | TASK-006 | 5min | [Details](phase-3/TASK-007.md) @phase-3/TASK-007.md |
 
 ---
 
