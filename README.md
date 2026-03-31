@@ -1,5 +1,7 @@
 # ccorch
 
+> **Status: Experimental** — This plugin is in early development. Each orchestration session spawns multiple Claude Code instances, which can consume significant tokens. Use with caution and monitor your usage.
+
 tmux-based orchestration plugin for Claude Code. Delegates complex tasks across multiple tmux panes with a 3-level hierarchy.
 
 ## Prerequisites

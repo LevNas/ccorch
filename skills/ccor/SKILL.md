@@ -50,14 +50,17 @@ SCRIPT_PATH="${CLAUDE_PLUGIN_ROOT}/scripts/ccorch-wrapper.sh"
 
 ### 4. Launch Main Brain
 
-Create a new tmux window and launch the wrapper script:
+Split the current pane and launch the wrapper script. Each pane gets a title with depth prefix for identification.
 
 ```bash
-tmux new-window -n "ccorch-${SESSION_ID}" \
+PROJECT_DIR=$(pwd)
+
+tmux split-pane -h \
   "CCORCH_DEPTH=1 \
    CCORCH_SESSION_ID=${SESSION_ID} \
    CCORCH_PARENT_CHANNEL=${CHANNEL} \
    CCORCH_WORK_DIR=${WORK_DIR} \
+   CCORCH_PROJECT_DIR=${PROJECT_DIR} \
    CCORCH_TIMEOUT=${TIMEOUT} \
    CCORCH_MAX_PANES=${MAX_PANES} \
    bash ${SCRIPT_PATH} '${TASK}'"

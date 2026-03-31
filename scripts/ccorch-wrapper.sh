@@ -16,12 +16,14 @@
 #   CCORCH_SESSION_ID     — Unique session identifier
 #   CCORCH_PARENT_CHANNEL — tmux wait-for channel to signal parent
 #   CCORCH_WORK_DIR       — Directory for result files
+#   CCORCH_PROJECT_DIR    — Project directory where Claude should run (user's cwd when /ccor was invoked)
 #
 # Optional environment variables:
 #   CCORCH_TIMEOUT        — Timeout in seconds (default: 600)
 #   CCORCH_MAX_PANES      — Maximum pane count (default: 8)
 #   CCORCH_MAX_CHILDREN_D1 — Max children for Main Brain/DEPTH=1 (default: 3)
 #   CCORCH_MAX_CHILDREN_D2 — Max children for Child/DEPTH=2 (default: 2)
+#   CCORCH_PARENT_PANE    — Parent's tmux pane ID (reserved for future layout use)
 
 set -euo pipefail
 
@@ -32,6 +34,7 @@ DEPTH="${CCORCH_DEPTH:?CCORCH_DEPTH is required (1, 2, or 3)}"
 SESSION_ID="${CCORCH_SESSION_ID:?CCORCH_SESSION_ID is required}"
 PARENT_CHANNEL="${CCORCH_PARENT_CHANNEL:?CCORCH_PARENT_CHANNEL is required}"
 WORK_DIR="${CCORCH_WORK_DIR:?CCORCH_WORK_DIR is required}"
+PROJECT_DIR="${CCORCH_PROJECT_DIR:?CCORCH_PROJECT_DIR is required}"
 TIMEOUT="${CCORCH_TIMEOUT:-600}"
 MAX_PANES="${CCORCH_MAX_PANES:-8}"
 MAX_CHILDREN_D1="${CCORCH_MAX_CHILDREN_D1:-3}"
@@ -40,14 +43,27 @@ MAX_CHILDREN_D2="${CCORCH_MAX_CHILDREN_D2:-2}"
 # Resolve the directory where this script lives (for child pane references)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Change to the user's project directory — all agents must run in the same context
+cd "$PROJECT_DIR" || { echo "Error: Cannot cd to $PROJECT_DIR"; exit 1; }
+
 # Generate unique child ID
 CHILD_ID="depth${DEPTH}-$(date +%s%N | cut -c 11-16)"
 RESULT_FILE="${WORK_DIR}/${CHILD_ID}.md"
 
-# --- Record pane ID for cleanup ---
+# --- Record pane ID and set pane title ---
 
 PANE_ID_FILE="${WORK_DIR}/${CHILD_ID}.pane"
-tmux display-message -p '#{pane_id}' > "$PANE_ID_FILE" 2>/dev/null || true
+CURRENT_PANE_ID=$(tmux display-message -p '#{pane_id}' 2>/dev/null || echo "")
+echo "$CURRENT_PANE_ID" > "$PANE_ID_FILE"
+
+# Set descriptive pane title based on depth
+TASK_SHORT="$(echo "$TASK" | head -c 40 | tr '\n' ' ')"
+case "$DEPTH" in
+  1) PANE_TITLE="[Main] ${TASK_SHORT}" ;;
+  2) PANE_TITLE="[Child] ${TASK_SHORT}" ;;
+  3) PANE_TITLE="[GChild] ${TASK_SHORT}" ;;
+esac
+tmux select-pane -t "$CURRENT_PANE_ID" -T "$PANE_TITLE" 2>/dev/null || true
 
 # --- Signal guarantee via trap ---
 
@@ -203,7 +219,7 @@ To delegate a subtask:
 
 1. Generate a channel name: CHILD_CHANNEL=\"CCORCH_\${SESSION_ID}_child_\$(date +%s%N | cut -c 11-16)\"
 2. Launch via tmux:
-   tmux split-pane -h \"CCORCH_DEPTH=${NEXT_DEPTH} CCORCH_SESSION_ID=${SESSION_ID} CCORCH_PARENT_CHANNEL=\${CHILD_CHANNEL} CCORCH_WORK_DIR=${WORK_DIR} CCORCH_TIMEOUT=${TIMEOUT} bash ${SCRIPT_DIR}/ccorch-wrapper.sh '<subtask>'\"
+   tmux split-pane -h \"CCORCH_DEPTH=${NEXT_DEPTH} CCORCH_SESSION_ID=${SESSION_ID} CCORCH_PARENT_CHANNEL=\${CHILD_CHANNEL} CCORCH_WORK_DIR=${WORK_DIR} CCORCH_PROJECT_DIR=${PROJECT_DIR} CCORCH_TIMEOUT=${TIMEOUT} bash ${SCRIPT_DIR}/ccorch-wrapper.sh '<subtask>'\"
 3. Wait in background: run tmux wait-for \${CHILD_CHANNEL} with run_in_background: true
 4. After signal, read the child's result file from ${WORK_DIR}/
 5. Update the status dashboard with the child's result
@@ -234,14 +250,14 @@ If you need changes to shared files (package.json, etc.), note them in your resu
 - More panes does NOT mean faster — host resources become the bottleneck
 - If you have more subtasks, run them in batches
 
-## Creating Child Panes
+## Creating Grandchild Panes
 You can further delegate subtasks to grandchild panes (DEPTH=3, max depth). To create one:
 
 1. Generate a channel name: CHILD_CHANNEL=\"CCORCH_\${SESSION_ID}_child_\$(date +%s%N | cut -c 11-16)\"
 2. Launch via tmux:
-   tmux split-pane -h \"CCORCH_DEPTH=${NEXT_DEPTH} CCORCH_SESSION_ID=${SESSION_ID} CCORCH_PARENT_CHANNEL=\${CHILD_CHANNEL} CCORCH_WORK_DIR=${WORK_DIR} CCORCH_TIMEOUT=${TIMEOUT} bash ${SCRIPT_DIR}/ccorch-wrapper.sh '<subtask>'\"
+   tmux split-pane -h \"CCORCH_DEPTH=${NEXT_DEPTH} CCORCH_SESSION_ID=${SESSION_ID} CCORCH_PARENT_CHANNEL=\${CHILD_CHANNEL} CCORCH_WORK_DIR=${WORK_DIR} CCORCH_PROJECT_DIR=${PROJECT_DIR} CCORCH_TIMEOUT=${TIMEOUT} bash ${SCRIPT_DIR}/ccorch-wrapper.sh '<subtask>'\"
 3. Wait in background: run tmux wait-for \${CHILD_CHANNEL} with run_in_background: true
-4. After signal, read the child's result file from ${WORK_DIR}/
+4. After signal, read the grandchild's result file from ${WORK_DIR}/
 
 ## Pane Cleanup
 After grandchildren complete, close their panes:
@@ -291,35 +307,73 @@ Write to a temporary file first, then rename:
   RESULTEOF
   mv \"${RESULT_FILE}.tmp\" \"${RESULT_FILE}\""
 
-# --- Launch Claude Code ---
+# --- Export env vars for Stop hook ---
+# The ccorch Stop hook (hooks/stop_signal.sh) reads these to signal the parent.
 
+export CCORCH_PARENT_CHANNEL
+export CCORCH_SESSION_ID
+export CCORCH_DEPTH
+export CCORCH_WORK_DIR
+export CCORCH_PROJECT_DIR
+export CCORCH_PARENT_PANE="${CCORCH_PARENT_PANE:-}"
+export CCORCH_RESULT_FILE="$RESULT_FILE"
+
+# --- Write task to file for safe delivery ---
+# Avoids send-keys escaping issues with special characters.
+
+TASK_FILE="${WORK_DIR}/${CHILD_ID}-task.txt"
+printf '%s' "$TASK" > "$TASK_FILE"
+
+# --- Launch Claude Code (interactive mode) ---
+# Interactive mode shows the TUI so users can see real-time progress.
+# The Stop hook handles parent signaling on completion.
+
+CURRENT_PANE=$(tmux display-message -p '#{pane_id}')
+
+# Build Claude command
 CLAUDE_CMD=(
   claude
   --dangerously-skip-permissions
   --allowedTools "$ALLOWED_TOOLS"
   --append-system-prompt "$SYSTEM_PROMPT"
-  -p "$TASK"
 )
 
 if [ -n "${DISALLOWED_OPTS:-}" ]; then
-  # Insert --disallowedTools before -p
   CLAUDE_CMD=(
     claude
     --dangerously-skip-permissions
     --allowedTools "$ALLOWED_TOOLS"
     --disallowedTools "Agent"
     --append-system-prompt "$SYSTEM_PROMPT"
-    -p "$TASK"
   )
 fi
 
-"${CLAUDE_CMD[@]}"
+# Schedule task delivery after Claude TUI initializes
+(
+  sleep 3
+  # Use load-buffer + paste-buffer for safe delivery of arbitrary text
+  tmux load-buffer "$TASK_FILE"
+  tmux paste-buffer -t "$CURRENT_PANE"
+  sleep 0.5
+  tmux send-keys -t "$CURRENT_PANE" Enter
+) &
+SENDER_PID=$!
+
+# Launch Claude interactively (blocks until Claude exits)
+"${CLAUDE_CMD[@]}" || true
 
 # --- Post-execution ---
+# Claude has exited (user typed /exit, pane was killed, or watchdog fired).
+
+# Kill sender if still waiting
+kill "$SENDER_PID" 2>/dev/null || true
 
 # Kill watchdog (task completed before timeout)
 kill "$WATCHDOG_PID" 2>/dev/null || true
 unset WATCHDOG_PID
+
+# Clean up task file
+rm -f "$TASK_FILE"
 
 # Write success result if Claude didn't write one
 if [ ! -f "$RESULT_FILE" ]; then
