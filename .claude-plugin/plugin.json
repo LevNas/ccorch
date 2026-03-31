@@ -1,7 +1,7 @@
 {
   "name": "ccorch",
   "description": "tmux-based orchestration plugin for Claude Code. Provides /ccor skill for multi-level task delegation.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "LevNas"
   },

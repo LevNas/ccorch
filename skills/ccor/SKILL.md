@@ -89,11 +89,28 @@ cat "${WORK_DIR}/result.md"
 
 ### 6. Present Results
 
-Read `${WORK_DIR}/result.md` and present a summary to the user:
+Read `${WORK_DIR}/status.md` (dashboard) and `${WORK_DIR}/result.md` and present a summary to the user:
 - Overall status (success / partial / error)
-- Number of children and their statuses
+- Agent overview from status dashboard (roles, owned paths, statuses)
 - List of changed files
 - Key discoveries
+
+### 7. Pane Cleanup
+
+After presenting results, ask the user: "Completed panes are still open. Close them?"
+
+If approved, close all completed panes:
+
+```bash
+for pane_file in ${WORK_DIR}/*.pane; do
+  pane_id=$(cat "$pane_file")
+  tmux kill-pane -t "$pane_id" 2>/dev/null || true
+done
+rm -f ${WORK_DIR}/*.pane
+```
+
+Note: The Main Brain also performs pane cleanup for its children during orchestration.
+This step handles any remaining panes (e.g., the Main Brain's own window).
 
 ## ccmemo Integration
 
@@ -112,6 +129,8 @@ The Main Brain's system prompt includes guidance on `--worktree` usage:
 > use `--worktree` (`-w`) when launching Claude Code in child panes. For research, analysis,
 > or documentation tasks, worktree is unnecessary.
 
+Branch naming convention: `claude/<scope>-<session_id>` (e.g., `claude/auth-1711871234`).
+
 This decision is delegated to the Main Brain based on task analysis.
 
 ## Environment Variables
@@ -120,6 +139,8 @@ This decision is delegated to the Main Brain based on task analysis.
 |----------|---------|-------------|
 | `CCORCH_TIMEOUT` | `600` | Timeout in seconds per pane |
 | `CCORCH_MAX_PANES` | `8` | Maximum total panes per session |
+| `CCORCH_MAX_CHILDREN_D1` | `3` | Max concurrent children for Main Brain |
+| `CCORCH_MAX_CHILDREN_D2` | `2` | Max concurrent grandchildren per Child |
 
 ## Error Handling
 

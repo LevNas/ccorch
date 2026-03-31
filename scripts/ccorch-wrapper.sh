@@ -20,6 +20,8 @@
 # Optional environment variables:
 #   CCORCH_TIMEOUT        — Timeout in seconds (default: 600)
 #   CCORCH_MAX_PANES      — Maximum pane count (default: 8)
+#   CCORCH_MAX_CHILDREN_D1 — Max children for Main Brain/DEPTH=1 (default: 3)
+#   CCORCH_MAX_CHILDREN_D2 — Max children for Child/DEPTH=2 (default: 2)
 
 set -euo pipefail
 
@@ -32,6 +34,8 @@ PARENT_CHANNEL="${CCORCH_PARENT_CHANNEL:?CCORCH_PARENT_CHANNEL is required}"
 WORK_DIR="${CCORCH_WORK_DIR:?CCORCH_WORK_DIR is required}"
 TIMEOUT="${CCORCH_TIMEOUT:-600}"
 MAX_PANES="${CCORCH_MAX_PANES:-8}"
+MAX_CHILDREN_D1="${CCORCH_MAX_CHILDREN_D1:-3}"
+MAX_CHILDREN_D2="${CCORCH_MAX_CHILDREN_D2:-2}"
 
 # Resolve the directory where this script lives (for child pane references)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,6 +43,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Generate unique child ID
 CHILD_ID="depth${DEPTH}-$(date +%s%N | cut -c 11-16)"
 RESULT_FILE="${WORK_DIR}/${CHILD_ID}.md"
+
+# --- Record pane ID for cleanup ---
+
+PANE_ID_FILE="${WORK_DIR}/${CHILD_ID}.pane"
+tmux display-message -p '#{pane_id}' > "$PANE_ID_FILE" 2>/dev/null || true
 
 # --- Signal guarantee via trap ---
 
@@ -105,6 +114,28 @@ else
   DISALLOWED_OPTS='--disallowedTools "Agent"'
 fi
 
+# --- Status dashboard ---
+
+STATUS_FILE="${WORK_DIR}/status.md"
+
+# Initialize status dashboard for Main Brain
+if [ "$DEPTH" -eq 1 ]; then
+  cat > "${STATUS_FILE}.tmp" <<EOF
+# Orchestration Status
+
+**Task**: $(echo "$TASK" | head -c 200)
+**Started**: $(date -Iseconds)
+**Status**: running
+
+## Agents
+
+| ID | Role | Owned Paths | Status | Notes |
+|----|------|-------------|--------|-------|
+| main | Main Brain (coordinator) | — | running | Analyzing task |
+EOF
+  mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
+fi
+
 # --- Build system prompt ---
 
 SYSTEM_PROMPT="You are a CCORCH worker at DEPTH=${DEPTH}.
@@ -113,6 +144,7 @@ SYSTEM_PROMPT="You are a CCORCH worker at DEPTH=${DEPTH}.
 - Session ID: ${SESSION_ID}
 - Work directory: ${WORK_DIR}
 - Result file: ${RESULT_FILE}
+- Status dashboard: ${STATUS_FILE}
 - Parent channel: ${PARENT_CHANNEL}
 - Timeout: ${TIMEOUT}s
 
@@ -122,24 +154,110 @@ SYSTEM_PROMPT="You are a CCORCH worker at DEPTH=${DEPTH}.
 - No destructive filesystem operations (rm -rf)
 - Do not modify files outside the current working directory unless explicitly required by the task"
 
-if [ "$DEPTH" -lt 3 ]; then
-  NEXT_DEPTH=$((DEPTH + 1))
+if [ "$DEPTH" -eq 1 ]; then
+  NEXT_DEPTH=2
   SYSTEM_PROMPT="${SYSTEM_PROMPT}
 
+## Status Dashboard
+You MUST maintain ${STATUS_FILE} as a human-readable dashboard throughout the orchestration.
+Update it when: creating children, a child completes, or the overall task finishes.
+
+Format:
+\`\`\`markdown
+# Orchestration Status
+
+**Task**: <overall task description>
+**Started**: <timestamp>
+**Status**: running | completed | partial | error
+
+## Agents
+
+| ID | Role | Owned Paths | Status | Notes |
+|----|------|-------------|--------|-------|
+| main | Main Brain (coordinator) | — | running | |
+| child-1 | <role> | src/auth/ | running | |
+| child-2 | <role> | tests/ | waiting | |
+\`\`\`
+
+Write atomically: cat > \"${STATUS_FILE}.tmp\" ... && mv \"${STATUS_FILE}.tmp\" \"${STATUS_FILE}\"
+
+## Task Delegation Criteria
+- Only delegate subtasks estimated at **10+ minutes** of work
+- Tasks under 10 minutes: execute directly rather than paying the overhead of pane creation
+- Ideal candidates: independent work on separate directories with minimal file overlap
+
+## Child Pane Limits
+- You may create at most **${MAX_CHILDREN_D1} child panes** concurrently
+- More panes does NOT mean faster — host memory and disk I/O become bottlenecks, making ALL panes slower
+- If you have more subtasks than the limit, run them in batches: launch ${MAX_CHILDREN_D1}, wait for completion, then launch the next batch
+- Check current pane count: \`ls ${WORK_DIR}/*.pane 2>/dev/null | wc -l\`
+
+## File Ownership
+When delegating subtasks, assign **directory-level ownership** to each child:
+- Each child should own distinct directories (e.g., child-1 owns \`src/auth/\`, child-2 owns \`tests/\`)
+- Shared files (package.json, tsconfig.json, etc.) must NOT be modified by children — handle them yourself after children complete
+- Declare ownership in the status dashboard and in each child's task description
+
 ## Creating Child Panes
-You can delegate subtasks to child panes. To create one:
+To delegate a subtask:
 
 1. Generate a channel name: CHILD_CHANNEL=\"CCORCH_\${SESSION_ID}_child_\$(date +%s%N | cut -c 11-16)\"
 2. Launch via tmux:
    tmux split-pane -h \"CCORCH_DEPTH=${NEXT_DEPTH} CCORCH_SESSION_ID=${SESSION_ID} CCORCH_PARENT_CHANNEL=\${CHILD_CHANNEL} CCORCH_WORK_DIR=${WORK_DIR} CCORCH_TIMEOUT=${TIMEOUT} bash ${SCRIPT_DIR}/ccorch-wrapper.sh '<subtask>'\"
 3. Wait in background: run tmux wait-for \${CHILD_CHANNEL} with run_in_background: true
-4. After signal, read the child's result file from ${WORK_DIR}/"
+4. After signal, read the child's result file from ${WORK_DIR}/
+5. Update the status dashboard with the child's result
+
+## Worktree Usage
+If the task involves code changes that could conflict between children:
+- Use \`--worktree\` (\`-w\`) when launching Claude Code in child panes
+- Branch naming convention: \`claude/<scope>-${SESSION_ID}\` (e.g., \`claude/auth-${SESSION_ID}\`, \`claude/tests-${SESSION_ID}\`)
+- For research, analysis, or documentation tasks, worktree is unnecessary
+
+## Pane Cleanup
+After all children have completed and results are aggregated:
+1. List completed panes: \`ls ${WORK_DIR}/*.pane\`
+2. Close each pane: \`tmux kill-pane -t <pane_id>\` (read pane ID from .pane files)
+3. Clean up pane ID files: \`rm ${WORK_DIR}/*.pane\`
+4. Update the status dashboard to reflect cleanup"
+
+elif [ "$DEPTH" -eq 2 ]; then
+  NEXT_DEPTH=3
+  SYSTEM_PROMPT="${SYSTEM_PROMPT}
+
+## File Ownership
+You have been assigned specific directories to work on. Do NOT modify files outside your assigned scope.
+If you need changes to shared files (package.json, etc.), note them in your result file for the Main Brain to handle.
+
+## Child Pane Limits
+- You may create at most **${MAX_CHILDREN_D2} grandchild panes** concurrently
+- More panes does NOT mean faster — host resources become the bottleneck
+- If you have more subtasks, run them in batches
+
+## Creating Child Panes
+You can further delegate subtasks to grandchild panes (DEPTH=3, max depth). To create one:
+
+1. Generate a channel name: CHILD_CHANNEL=\"CCORCH_\${SESSION_ID}_child_\$(date +%s%N | cut -c 11-16)\"
+2. Launch via tmux:
+   tmux split-pane -h \"CCORCH_DEPTH=${NEXT_DEPTH} CCORCH_SESSION_ID=${SESSION_ID} CCORCH_PARENT_CHANNEL=\${CHILD_CHANNEL} CCORCH_WORK_DIR=${WORK_DIR} CCORCH_TIMEOUT=${TIMEOUT} bash ${SCRIPT_DIR}/ccorch-wrapper.sh '<subtask>'\"
+3. Wait in background: run tmux wait-for \${CHILD_CHANNEL} with run_in_background: true
+4. After signal, read the child's result file from ${WORK_DIR}/
+
+## Pane Cleanup
+After grandchildren complete, close their panes:
+1. Read pane ID from .pane files: \`cat ${WORK_DIR}/<grandchild_id>.pane\`
+2. Close: \`tmux kill-pane -t <pane_id>\`"
+
 else
   SYSTEM_PROMPT="${SYSTEM_PROMPT}
 
 ## Depth Limit
 You are at maximum depth (DEPTH=3). Do NOT attempt to create child panes.
-Execute your assigned task directly and write results to ${RESULT_FILE}."
+Execute your assigned task directly and write results to ${RESULT_FILE}.
+
+## File Ownership
+You have been assigned specific directories to work on. Do NOT modify files outside your assigned scope.
+If you need changes to shared files, note them in your result file for your parent to handle."
 fi
 
 SYSTEM_PROMPT="${SYSTEM_PROMPT}

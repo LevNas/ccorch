@@ -58,6 +58,8 @@ Your Session ──► Main Brain (DEPTH=1)
 |---------------------|---------|-------------|
 | `CCORCH_TIMEOUT` | `600` | Timeout in seconds per pane |
 | `CCORCH_MAX_PANES` | `8` | Maximum total panes per session |
+| `CCORCH_MAX_CHILDREN_D1` | `3` | Max concurrent children for Main Brain |
+| `CCORCH_MAX_CHILDREN_D2` | `2` | Max concurrent grandchildren per Child |
 
 ## Optional Integrations
 
