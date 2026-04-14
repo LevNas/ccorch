@@ -70,6 +70,24 @@ Your Session ──► Main Brain (DEPTH=1)
 | [ccmemo](https://github.com/LevNas/ccmemo) | Persist discoveries via `/record-knowledge`, track plans via `/plan-task` |
 | [ccresmon](https://github.com/LevNas/ccresmon) | Resource monitoring for spawned panes |
 
+## For Contributors
+
+ccorch follows the LevNas plugin conventions maintained in [claudecode-plugins/docs/development-guide.md](https://github.com/LevNas/claudecode-plugins/blob/main/docs/development-guide.md). Document placement and SKILL.md frontmatter rules are summarized below.
+
+| Location | Purpose | Audience |
+|----------|---------|----------|
+| `README.md` | Plugin overview and usage | Users (humans) |
+| `skills/<name>/SKILL.md` | Skill definition with required frontmatter (`name`/`description`/`license`/`allowed-tools`) | Claude Code |
+| `hooks/` | Hook implementations and `hooks.json` | Claude Code |
+| `scripts/` | Wrapper scripts (e.g. `ccorch-wrapper.sh`) | Runtime |
+| `docs/sdd/` | SDD-style design documents (requirements/design/tasks) | Contributors (humans) |
+
+Run the central linter from claudecode-plugins before sending a PR:
+
+```bash
+bash ~/src/github.com/LevNas/claudecode-plugins/scripts/lint-skills.sh ~/src/github.com/LevNas/ccorch
+```
+
 ## License
 
 MIT

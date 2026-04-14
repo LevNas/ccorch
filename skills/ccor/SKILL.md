@@ -1,3 +1,10 @@
+---
+name: ccor
+description: Orchestrate complex tasks across multiple tmux panes with 3-level depth control (Main Brain → Child → Grandchild). Launches a wrapper script in a new pane, waits for completion via tmux wait-for signal, and aggregates results from status/result markdown files.
+license: MIT
+allowed-tools: Bash, Read
+---
+
 # ccor
 
 Orchestrate complex tasks across multiple tmux panes with 3-level depth control (Main Brain → Child → Grandchild).
