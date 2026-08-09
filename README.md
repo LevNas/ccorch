@@ -2,12 +2,16 @@
 
 > **Status: Experimental** — This plugin is in early development. Each orchestration session spawns multiple Claude Code instances, which can consume significant tokens. Use with caution and monitor your usage.
 
-tmux-based orchestration plugin for Claude Code. Delegates complex tasks across multiple tmux panes with a 3-level hierarchy.
+Orchestration plugin for Claude Code. Since v2 (0.3.0) the default substrate
+is Claude Code's native subagents — background agents, SendMessage resume,
+and worktree isolation — with a bundled, model-routed agent catalog and
+enforcement hooks. tmux panes remain for exactly three cases (see below).
 
 ## Prerequisites
 
-- [tmux](https://github.com/tmux/tmux) 1.8+ (required for `wait-for` command)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI
+- `jq` (recommended — the v2 hooks no-op without it)
+- [tmux](https://github.com/tmux/tmux) 1.8+ (pane mode `/ccor` only)
 
 ## Installation
 
@@ -19,7 +23,71 @@ tmux-based orchestration plugin for Claude Code. Delegates complex tasks across 
 /plugin install ccorch@levnas-plugins
 ```
 
-## Usage
+## v2: Subagent Orchestration (default)
+
+### Agent catalog
+
+Nine leaf agent types ship with `model` and `effort` pinned in frontmatter,
+so "forgot to specify a model" (which silently inherits your expensive
+main-session model) becomes "picked a type with the right cost". None of
+them has the Agent tool — leaves cannot spawn sub-leaves (depth control).
+
+| Type | Job | Model | Effort |
+|------|-----|-------|--------|
+| `ccorch:web-research` | Web research over 3+ sources, cited + freshness-dated | sonnet | low |
+| `ccorch:url-extract` | Pure extraction from given URLs | haiku | low |
+| `ccorch:log-distiller` | Distill tests/builds/logs to the lines that matter | haiku | low |
+| `ccorch:worktree-worker` | Mechanical implementation + commit in an isolated worktree | sonnet | low |
+| `ccorch:impl-verifier` | Acceptance-criteria verification, evidence per criterion | sonnet | medium |
+| `ccorch:pbr-reviewer` | Perspective-parameterized review (`[LGTM]/[CONCERN]/[GAP]`) | sonnet | medium |
+| `ccorch:kb-integrator` | Integrate 10+ knowledge entries into a cited synthesis | sonnet | medium |
+| `ccorch:knowledge-recorder` | Draft KB entries per host conventions (ccmemo style) | sonnet | medium |
+| `ccorch:web-refuter` | Adversarial refutation of decision-grade claims | sonnet | high |
+
+Escalation is deterministic: on insufficient quality, the orchestrator
+re-runs the same prompt one model tier up (at most once) — leaves never
+judge their own quality.
+
+### Enforcement hooks
+
+| Hook | Event | What it does |
+|------|-------|--------------|
+| `agent_gate.sh` | PreToolUse (Agent) | Denies spawns beyond the parallel cap; denies model overrides above a catalog type's tier (+1 allowed for escalation); denies non-catalog spawns with no explicit model |
+| `ledger_record.sh` | PostToolUse (Agent) | Appends launch records (thread → agentId) to `.claude/ccorch/ledger.jsonl` |
+| `ledger_stop.sh` | SubagentStop | Appends stop records (balances the running count) |
+
+All hooks are fail-open: missing `jq`, malformed input, or an unreadable
+ledger never blocks a session. Ledger format: [docs/ledger.md](docs/ledger.md).
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `CCORCH_GATE` | `on` | `off` disables both guards |
+| `CCORCH_MODEL_GUARD` | `on` | `off` disables only the model-routing guard |
+| `CCORCH_MAX_PARALLEL` | `3` | Concurrent agent cap (host-resource guard) |
+| `CCORCH_GATE_EXEMPT_TYPES` | `claude-code-guide,statusline-setup` | Types exempt from the model guard |
+
+### `/ccor-parallel`
+
+Fans out file-ownership-disjoint tasks to parallel `worktree-worker` agents,
+then executes the four orchestrator responsibilities the harness does not
+cover: **origin pinning** (with `worktree.baseRef: head`, the orchestrator's
+HEAD decides every worker's base), **capture preservation** (session-capture
+files die with the worktree — move them out first), **integration merge**
+(dedicated worktree, `--no-ff`, never on main), and **cleanup** (`worktree
+remove --force` + branch deletion, only after a `merge-base --is-ancestor`
+check). See [skills/ccor-parallel/SKILL.md](skills/ccor-parallel/SKILL.md).
+
+### When panes are still the right tool
+
+Use `/ccor` (pane mode, below) only for:
+
+1. Work that **writes to another repository** (subagents cannot)
+2. Work needing the target repo's **permission/hook enforcement layer**
+3. Work needing **real-time visual supervision**
+
+Design rationale: [docs/sdd/design/decisions/DEC-004.md](docs/sdd/design/decisions/DEC-004.md).
+
+## Pane Mode: `/ccor`
 
 ```
 /ccor <task description>
@@ -78,6 +146,7 @@ ccorch follows the LevNas plugin conventions maintained in [claudecode-plugins/d
 |----------|---------|----------|
 | `README.md` | Plugin overview and usage | Users (humans) |
 | `skills/<name>/SKILL.md` | Skill definition with required frontmatter (`name`/`description`/`license`/`allowed-tools`) | Claude Code |
+| `agents/` | Bundled subagent definitions (model/effort pinned in frontmatter) | Claude Code |
 | `hooks/` | Hook implementations and `hooks.json` | Claude Code |
 | `scripts/` | Wrapper scripts (e.g. `ccorch-wrapper.sh`) | Runtime |
 | `docs/sdd/` | SDD-style design documents (requirements/design/tasks) | Contributors (humans) |
