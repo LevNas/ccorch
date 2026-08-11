@@ -41,7 +41,7 @@ printf '%s' "$input" | jq -c \
     agent_id: (if $agent_id == "" then null else $agent_id end),
     agent_type: (.tool_input.subagent_type // "claude"),
     model: (.tool_input.model // null),
-    background: (.tool_input.run_in_background // true),
+    background: (if (.tool_input | has("run_in_background")) then .tool_input.run_in_background else true end),
     thread: (.tool_input.description // null)}' \
   >> "$ledger_dir/ledger.jsonl" 2>/dev/null
 
