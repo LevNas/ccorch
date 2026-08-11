@@ -142,7 +142,7 @@ tail -1 .claude/ccorch/ledger.jsonl | jq .
 永続化がなければ、次のセッションはゼロから始まります。
 同じマーケットプレイスの姉妹プラグイン [ccmemo](https://github.com/LevNas/ccmemo) がこの永続化を担い、カタログのうち2型は ccmemo に直接つながるように作られています。
 
-- **`ccorch:knowledge-recorder`**：ccmemo の `/record-knowledge` 規約に沿ってナレッジエントリを起草します。ccmemo のスキャフォールド（`.claude/knowledge/`）があれば、オーケストレーションの1ウェーブを、そのままコミットできるエントリ群の下書きで締めくくれます。何を記録するかの判断は自分の手に残ります。
+- **`ccorch:knowledge-recorder`**：ccmemo の `/record-knowledge` 規約に沿ってナレッジエントリを起草します。ccmemo で scaffold した構成（`.claude/knowledge/`）があれば、オーケストレーションの1ウェーブを、そのままコミットできるエントリ群の下書きで締めくくれます。何を記録するかの判断は自分の手に残ります。
 - **`ccorch:kb-integrator`**：10件以上の ccmemo エントリを読み、出典付きの統合を返します。エントリが増えても、設計前の「何をすでに知っているか」の確認が一問で済みます。
 
 ccmemo は逆方向の記憶も与えます。
