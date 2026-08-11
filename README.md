@@ -23,6 +23,10 @@ enforcement hooks. tmux panes remain for exactly three cases (see below).
 /plugin install ccorch@levnas-plugins
 ```
 
+Step-by-step walkthrough — repository layout, user scope, first delegation,
+ccmemo integration: [docs/getting-started.md](docs/getting-started.md)
+([日本語](docs/getting-started.ja.md)).
+
 ## v2: Subagent Orchestration (default)
 
 ### Agent catalog
