@@ -28,6 +28,11 @@ Written by `hooks/ledger_record.sh` (PostToolUse on Agent) and
 
 - `agent_id` — extracted from the spawn response text; `null` when the
   pattern is absent (the record still counts for the parallel cap).
+  Observed in practice: background spawns carry the id in the response
+  text, **synchronous spawns do not** — their launch record has
+  `agent_id: null` and the id arrives on the matching `stop` record
+  instead (SubagentStop input). Join launch↔stop via `agent_type` plus
+  timestamps when resuming a synchronous thread.
 - `model` — only an explicit per-call override; `null` means the agent
   definition's frontmatter (or inheritance) decided.
 - `thread` — the short `description` parameter only. Prompt bodies are
