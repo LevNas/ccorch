@@ -56,7 +56,7 @@ judge their own quality.
 
 | Hook | Event | What it does |
 |------|-------|--------------|
-| `agent_gate.sh` | PreToolUse (Agent) | Denies spawns beyond the parallel cap; denies model overrides above a catalog type's tier (+1 allowed for escalation); denies non-catalog spawns with no explicit model |
+| `agent_gate.sh` | PreToolUse (Agent) | Denies model overrides above a catalog type's tier (+1 allowed for escalation). The parallel cap and the default model are official settings now, see below |
 | `ledger_record.sh` | PostToolUse (Agent) | Appends launch records (thread → agentId) to `.claude/ccorch/ledger.jsonl` |
 | `ledger_stop.sh` | SubagentStop | Appends stop records (balances the running count) |
 
@@ -65,10 +65,30 @@ ledger never blocks a session. Ledger format: [docs/ledger.md](docs/ledger.md).
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `CCORCH_GATE` | `on` | `off` disables both guards |
-| `CCORCH_MODEL_GUARD` | `on` | `off` disables only the model-routing guard |
-| `CCORCH_MAX_PARALLEL` | `3` | Concurrent agent cap (host-resource guard) |
-| `CCORCH_GATE_EXEMPT_TYPES` | `claude-code-guide,statusline-setup` | Types exempt from the model guard |
+| `CCORCH_GATE` | `on` | `off` disables the catalog tier guard |
+| `CCORCH_MODEL_GUARD` | `on` | Same as `CCORCH_GATE` (kept for compatibility) |
+
+### Official settings that replaced two guards (0.4.0)
+
+The parallel cap and the "no explicit model" deny used to be custom guards in `agent_gate.sh`. Claude Code provides both officially; put them in the `env` block of `~/.claude/settings.json` (or a project's `.claude/settings.json` to share them):
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "3",
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
+  }
+}
+```
+
+| Variable | Replaces | Notes |
+|---|---|---|
+| `CLAUDE_CODE_SUBAGENT_MODEL` | `CCORCH_MODEL_GUARD` deny for spawns without a model | Default model for every subagent not assigned one another way (per-invocation `model` and agent frontmatter still win). `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` forces it on all |
+| `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` | `CCORCH_MAX_PARALLEL` (ledger-derived cap) | The Agent tool refuses to spawn past it. Related: `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` |
+| `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` | (new) | `1` stops subagents from spawning their own, which is how the catalog leaves are designed |
+
+Reference: https://code.claude.com/docs/en/env-vars
 
 ### `/ccor-parallel`
 

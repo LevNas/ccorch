@@ -53,8 +53,9 @@ grep -rs '"baseRef"' .claude/settings.json .claude/settings.local.json
 
 ## Phase 1 — Fan out in waves
 
-- At most `CCORCH_MAX_PARALLEL` (default 3) workers at once; the gate hook
-  enforces this. Split excess tasks into waves.
+- At most `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` workers at once (an official
+  setting; recommended `3`). The Agent tool refuses spawns past it. Split
+  excess tasks into waves.
 - Spawn `ccorch:worktree-worker` per task, background, with this prompt
   shape:
 
