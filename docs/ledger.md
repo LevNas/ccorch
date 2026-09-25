@@ -27,7 +27,9 @@ Written by `hooks/ledger_record.sh` (PostToolUse on Agent) and
 ```
 
 - `agent_id` — extracted from the spawn response text; `null` when the
-  pattern is absent (the record still counts for the parallel cap).
+  pattern is absent (the record still balances the launch/stop count; the
+  parallel cap itself is the official `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`
+  since 0.4.0).
   Observed in practice: background spawns carry the id in the response
   text, **synchronous spawns do not** — their launch record has
   `agent_id: null` and the id arrives on the matching `stop` record

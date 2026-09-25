@@ -132,8 +132,8 @@ tail -1 .claude/ccorch/ledger.jsonl | jq .
 ## チューニング
 
 既定値は保守的です。
-初日に知る価値があるのは `CCORCH_MAX_PARALLEL`（既定 `3`）だけです。
-同時に動くエージェントはそれぞれが1つの Claude Code インスタンスなので、控えめなホストでは `2` に下げます。
+初日に知る価値があるのは公式の `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` だけです（`~/.claude/settings.json` の `env` に `3`、控えめなホストでは `2` を置きます）。
+同時に動くエージェントはそれぞれが1つの Claude Code インスタンスです。あわせて `CLAUDE_CODE_SUBAGENT_MODEL` を置くと、カタログ外の起動が安い階梯に既定されます。
 環境変数の全表は [README](../README.md#enforcement-hooks) にあります。
 
 ## ccmemo でループを閉じる

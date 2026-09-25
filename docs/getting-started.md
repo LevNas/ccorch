@@ -102,8 +102,9 @@ What just happened, and why it matters:
 
 - the leaf ran on its **pinned model and effort** (sonnet, low effort) instead
   of silently inheriting your expensive main-session model;
-- `agent_gate.sh` enforced the **parallel cap** (default 3) and the
-  **model-routing guard**;
+- `agent_gate.sh` enforced the **catalog tier guard** (the parallel cap and
+  the default subagent model come from the official `env` settings, see
+  Tuning);
 - the launch was appended to the **ledger** at `.claude/ccorch/ledger.jsonl`.
 
 Verify the ledger after the first run:
@@ -148,10 +149,12 @@ Use `/ccor` (tmux pane mode) only for the three cases subagents cannot cover:
 
 ## Tuning
 
-Defaults are conservative. The one knob most worth knowing on day one is
-`CCORCH_MAX_PARALLEL` (default `3`) — lower it to `2` on a modest host, since
-every concurrent agent is a running Claude Code instance. The full table of
-environment variables is in the [README](../README.md#enforcement-hooks).
+Defaults are conservative. The one knob most worth knowing on day one is the
+official `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (set it to `3`, or `2` on a
+modest host, in the `env` block of `~/.claude/settings.json`), since every
+concurrent agent is a running Claude Code instance. Pair it with
+`CLAUDE_CODE_SUBAGENT_MODEL` so non-catalog spawns default to a cheaper tier.
+The full table is in the [README](../README.md#enforcement-hooks).
 
 ## Close the loop with ccmemo
 
