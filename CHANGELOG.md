@@ -2,6 +2,41 @@
 
 Earlier versions: see the git history.
 
+## 0.6.3 — 2026-10-05
+
+The four NITs deferred from #13's review (refs #11).
+
+### Fixed
+
+- **A pane killed with SIGKILL left its parent waiting.** The wrapper's trap does not run on
+  SIGKILL, so there was no result and no signal; a parent waited until its own
+  `CCORCH_TIMEOUT`, and `/ccor` waited for ever for a Main Brain. Before `claude` starts, the
+  wrapper now sets `remain-on-exit on` and a pane-level `pane-died` hook on its own pane. tmux
+  runs the hook when the pane's program dies: `scripts/ccorch-pane-died.sh` writes
+  `status: error` unless the pane left a result (and copies it to `result.md` for a Main
+  Brain), then the hook signals the parent and closes the pane. `cleanup()` removes both, so a
+  normal exit still signals once. A pane-level `pane-exited` hook does not work (it goes away
+  with the pane), and a server-level hook would change the user's tmux settings. Checked on
+  tmux 3.7b with a private server and a fake `claude` (`tests/test_tmux_hook.sh`); not yet
+  checked with a real Claude pane. Not covered: a SIGKILL during the start gate, before the
+  hook is set.
+- **The watchdog could overwrite a result written at the last moment.** It tested for a
+  result and then `mv`ed `status: timeout` over the file, and killed the pane either way. It
+  now publishes with `publish_if_absent` (new `scripts/ccorch-lib.sh`): `ln` fails when the
+  result exists, so there is no gap between the check and the write, and the pane is killed
+  only when the timeout result went in. The gap is closed by `ln`, not caught by a test; the
+  tests show that `publish_if_absent` never replaces an existing result. An empty result file
+  is still "no result", but is replaced only if it stays empty for `CCORCH_PUBLISH_GRACE`
+  seconds (default 5).
+- **The Stop hook signalled even when its copy to `result.md` failed**, so the user's session
+  could read a missing or older `result.md`. The Main Brain now signals only after a
+  successful copy. When the wrapper's own copy fails at exit, it removes an older `result.md`
+  that differs from the result file, and `/ccor`'s wait loop stops (with a message pointing to
+  the work directory) when a signal comes, `result.md` is missing and no Main Brain pane is
+  alive.
+- **Tests** for all three: `tests/test_wrapper.sh` (303 tests) and the new
+  `tests/test_tmux_hook.sh`. Each fix was undone once by hand to see a new test fail.
+
 ## 0.6.2 — 2026-10-05
 
 A problem found by the 0.6.1 live check (refs #11).

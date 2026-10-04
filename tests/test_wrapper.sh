@@ -30,9 +30,11 @@ mkdir -p "$FAKE_BIN"
 # set empty). list-panes can fail
 # (FAKE_LIST_FAIL), be slow (FAKE_LIST_DELAY, to force races), or signal the lock owner
 # with TERM first (FAKE_LIST_KILL, to end the wrapper while it holds the lock).
+# FAKE_TMUX_FAIL_ON makes every command that starts with it fail (after logging it).
 cat > "${FAKE_BIN}/tmux" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$FAKE_TMUX_LOG"
+if [ -n "${FAKE_TMUX_FAIL_ON:-}" ] && [[ "$*" == "$FAKE_TMUX_FAIL_ON"* ]]; then exit 1; fi
 case "$1" in
   list-panes)
     [ -e "$FAKE_LIST_FAIL" ] && exit 1
@@ -66,9 +68,29 @@ if [ -n "${FAKE_CLAUDE_WRITE:-}" ]; then
 elif [ -n "${FAKE_CLAUDE_EMPTY:-}" ]; then
   : > "$CCORCH_RESULT_FILE"
 fi
+# FAKE_CLAUDE_LATE_WRITE: after FAKE_CLAUDE_LATE_DELAY seconds, write the result (a pane that
+# finishes while the watchdog waits out the grace on an empty file).
+if [ -n "${FAKE_CLAUDE_LATE_WRITE:-}" ]; then
+  sleep "${FAKE_CLAUDE_LATE_DELAY:-1}"
+  printf '%s\n' "$FAKE_CLAUDE_LATE_WRITE" > "$CCORCH_RESULT_FILE"
+fi
+# FAKE_CLAUDE_SLEEP keeps the pane running; ".slept" shows it was not killed meanwhile.
+if [ -n "${FAKE_CLAUDE_SLEEP:-}" ]; then
+  sleep "$FAKE_CLAUDE_SLEEP"
+  : > "${FAKE_CLAUDE_ARGV}.slept"
+fi
 exit "${FAKE_CLAUDE_RC:-0}"
 EOF
-chmod +x "${FAKE_BIN}/tmux" "${FAKE_BIN}/claude"
+# cp fails for a copy to result.md (its temporary name) when FAKE_CP_FAIL is set.
+REAL_CP="$(command -v cp)"
+cat > "${FAKE_BIN}/cp" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${FAKE_CP_FAIL:-}" ]; then
+  case "\${@: -1}" in *result.md.*.tmp) exit 1 ;; esac
+fi
+exec "${REAL_CP}" "\$@"
+EOF
+chmod +x "${FAKE_BIN}/tmux" "${FAKE_BIN}/claude" "${FAKE_BIN}/cp"
 export PATH="${FAKE_BIN}:${PATH}"
 
 PASS=0
@@ -123,7 +145,9 @@ new_case() {
   export FAKE_WORK_DIR="$WORK_DIR"
   export FAKE_CLAUDE_RC=0
   export FAKE_LIST_DELAY=0
-  unset FAKE_LIST_KILL FAKE_PANE_ID FAKE_CLAUDE_WRITE FAKE_CLAUDE_EMPTY
+  unset FAKE_LIST_KILL FAKE_PANE_ID FAKE_CLAUDE_WRITE FAKE_CLAUDE_EMPTY FAKE_CLAUDE_SLEEP \
+    FAKE_CLAUDE_LATE_WRITE FAKE_CLAUDE_LATE_DELAY \
+    FAKE_TMUX_FAIL_ON FAKE_CP_FAIL CCORCH_PUBLISH_GRACE
   : > "$FAKE_PANES_FILE"
   : > "$FAKE_TMUX_LOG"
   live %99   # the fake current pane must be alive: the gate refuses otherwise
@@ -793,6 +817,164 @@ expect "hook, Main Brain: signals after copying" signalled
 expect "hook, Main Brain: no temporary file left" no_files "${WORK_DIR}"/result.md.*.tmp
 printf 'second\n' > "${WORK_DIR}/r.md"; run_mb_hook
 expect "hook, Main Brain rewrote its result: result.md follows" file_is "${WORK_DIR}/result.md" 'second'
+
+# A failed copy must not wake the user's session: result.md would be missing or older.
+new_case; printf 'first\n' > "${WORK_DIR}/r.md"; FAKE_CP_FAIL=1 run_mb_hook
+expect_not "hook, Main Brain, copy fails: no signal" signalled
+expect "hook, Main Brain, copy fails: no result.md" test ! -e "${WORK_DIR}/result.md"
+expect "hook, Main Brain, copy fails: no temporary file left" no_files "${WORK_DIR}"/result.md.*.tmp
+
+new_case; printf 'old\n' > "${WORK_DIR}/result.md"; printf 'new\n' > "${WORK_DIR}/r.md"
+FAKE_CP_FAIL=1 run_mb_hook
+expect_not "hook, Main Brain, copy fails over an older result.md: no signal" signalled
+
+new_case; FAKE_CP_FAIL=1 run_hook CCORCH_PARENT_CHANNEL=test-channel CCORCH_RESULT_FILE="${WORK_DIR}/r.md" CCORCH_COPY_RESULT= CCORCH_WORK_DIR="$WORK_DIR"
+expect "hook, child, cp failing: still signals (a child copies nothing)" signalled
+
+# --- The wrapper's cleanup: a failed copy removes an older result.md ---
+
+new_case; printf 'old copy\n' > "${WORK_DIR}/result.md"
+run_real 1 FAKE_CLAUDE_WRITE='final result' FAKE_CP_FAIL=1
+expect "cleanup copy fails: the older result.md is removed" test ! -e "${WORK_DIR}/result.md"
+expect "cleanup copy fails: the result file is kept" result_has 'final result'
+expect "cleanup copy fails: the parent is still signalled" tmux_logged 'wait-for -S test-channel'
+
+new_case; printf 'final result\n' > "${WORK_DIR}/result.md"
+run_real 1 FAKE_CLAUDE_WRITE='final result' FAKE_CP_FAIL=1
+expect "cleanup with result.md already equal: nothing to copy, result.md kept" file_is "${WORK_DIR}/result.md" 'final result'
+
+new_case; printf 'real result\n' > "${WORK_DIR}/result.md"; touch "$FAKE_LIST_FAIL"
+run_real 1 FAKE_CP_FAIL=1
+expect "refused before claude, cp failing: result.md untouched" file_is "${WORK_DIR}/result.md" 'real result'
+
+# --- publish_if_absent (scripts/ccorch-lib.sh) ---
+
+LIB="${HERE}/../scripts/ccorch-lib.sh"
+# publish <tmp content> — runs publish_if_absent on ${CASE_DIR}/tmp -> ${CASE_DIR}/target; sets PUB_RC
+publish() {
+  printf '%s\n' "$1" > "${CASE_DIR}/tmp"
+  PUB_RC=0
+  ( . "$LIB"; publish_if_absent "${CASE_DIR}/tmp" "${CASE_DIR}/target" ) || PUB_RC=$?
+}
+
+new_case; printf 'pane result\n' > "${CASE_DIR}/target"; publish 'timeout'
+expect "publish over a result: returns 1" test "$PUB_RC" = 1
+expect "publish over a result: the result is untouched" file_is "${CASE_DIR}/target" 'pane result'
+expect "publish over a result: the temporary file is removed" test ! -e "${CASE_DIR}/tmp"
+
+new_case; publish 'timeout'
+expect "publish with no result: returns 0" test "$PUB_RC" = 0
+expect "publish with no result: the target holds it" file_is "${CASE_DIR}/target" 'timeout'
+expect "publish with no result: the temporary file is gone" test ! -e "${CASE_DIR}/tmp"
+
+new_case; : > "${CASE_DIR}/target"; CCORCH_PUBLISH_GRACE=0 publish 'timeout'
+expect "publish over an empty file that stays empty: replaced" file_is "${CASE_DIR}/target" 'timeout'
+
+new_case; : > "${CASE_DIR}/target"
+( sleep 0.3; printf 'pane result\n' > "${CASE_DIR}/target" ) &
+CCORCH_PUBLISH_GRACE=2 publish 'timeout'; wait
+expect "publish over an empty file filled during the grace: returns 1" test "$PUB_RC" = 1
+expect "publish over an empty file filled during the grace: the pane's result stays" file_is "${CASE_DIR}/target" 'pane result'
+
+# --- Watchdog ---
+
+new_case; run_real 1 CCORCH_TIMEOUT=1 FAKE_CLAUDE_SLEEP=5
+expect "watchdog, no result: status: timeout" result_has 'status: timeout'
+expect "watchdog, no result: the pane is stopped" test ! -e "${FAKE_CLAUDE_ARGV}.slept"
+
+new_case; run_real 1 CCORCH_TIMEOUT=1 CCORCH_PUBLISH_GRACE=1 FAKE_CLAUDE_EMPTY=1 FAKE_CLAUDE_SLEEP=5
+expect "watchdog, empty result file: status: timeout after the grace" result_has 'status: timeout'
+expect "watchdog, empty result file: the pane is stopped" test ! -e "${FAKE_CLAUDE_ARGV}.slept"
+
+# Not the race itself (that is closed by ln in publish_if_absent, tested above): a pane that
+# finished before the timeout keeps its result and is not stopped.
+new_case; run_real 1 CCORCH_TIMEOUT=1 FAKE_CLAUDE_WRITE='final result' FAKE_CLAUDE_SLEEP=2
+expect "watchdog, result already written: the result stays" result_has 'final result'
+expect "watchdog, result already written: the pane is not stopped" test -e "${FAKE_CLAUDE_ARGV}.slept"
+
+# The watchdog's publish fails (the result arrives during the grace on an empty file): the
+# timeout is not written and the pane is not stopped.
+new_case; run_real 1 CCORCH_TIMEOUT=1 CCORCH_PUBLISH_GRACE=3 FAKE_CLAUDE_EMPTY=1 \
+  FAKE_CLAUDE_LATE_WRITE='late result' FAKE_CLAUDE_LATE_DELAY=2 FAKE_CLAUDE_SLEEP=3
+expect "watchdog, result written during the grace: the pane's result stays" result_has 'late result'
+expect_not "watchdog, result written during the grace: no timeout result" result_has 'status: timeout'
+expect "watchdog, result written during the grace: the pane is not stopped" test -e "${FAKE_CLAUDE_ARGV}.slept"
+
+# --- tmux pane-died hook: armed before claude, disarmed by the cleanup ---
+
+SCRIPTS_ABS="$(cd "${HERE}/../scripts" && pwd)"
+# log_line <fragment> — line number of the first tmux log line with the fragment (0 if none)
+log_line() { grep -nF -- "$1" "$FAKE_TMUX_LOG" | head -1 | cut -d: -f1 | grep . || echo 0; }
+# before <a> <b> — the fragment a is logged, and before b
+before() { local a b; a=$(log_line "$1"); b=$(log_line "$2"); [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && [ "$a" -lt "$b" ]; }
+
+new_case; run_real 1 FAKE_CLAUDE_WRITE='final result'
+ID=$(child_id)
+expect "hook: remain-on-exit is set on this pane" tmux_logged 'set-option -p -t %99 remain-on-exit on'
+expect "hook: pane-died writes the result, then signals, then closes the pane" \
+  tmux_logged "set-hook -p -t %99 pane-died run-shell 'bash ${SCRIPTS_ABS}/ccorch-pane-died.sh ${WORK_DIR}/${ID}.md ${WORK_DIR} 1 1' ; wait-for -S test-channel ; kill-pane -t %99"
+expect "hook: the cleanup unsets remain-on-exit" tmux_logged 'set-option -u -p -t %99 remain-on-exit'
+expect "hook: the cleanup unsets the hook" tmux_logged 'set-hook -u -p -t %99 pane-died'
+expect "hook: unset in order, option first" before 'set-option -u -p' 'set-hook -u -p'
+# The armed hook's text also contains "wait-for -S", so the signal is matched as a whole line.
+signal_line() { grep -nxF 'wait-for -S test-channel' "$FAKE_TMUX_LOG" | head -1 | cut -d: -f1 | grep . || echo 0; }
+expect "hook: disarmed before the trap's signal" \
+  test "$(log_line 'set-hook -u -p')" -gt 0 -a "$(log_line 'set-hook -u -p')" -lt "$(signal_line)"
+expect "hook: one signal on a normal exit (from the trap)" test "$(grep -cxF 'wait-for -S test-channel' "$FAKE_TMUX_LOG")" = 1
+
+new_case; seed_parent 2; run_real 2 CCORCH_PARENT_ID=parent-1
+expect "hook, child: no copy to result.md, depth 2" tmux_logged "${WORK_DIR}/$(child_id).md ${WORK_DIR} 0 2'"
+
+new_case; run_dry 1
+expect "hook: a dry run sets none" tmux_not_logged 'remain-on-exit'
+expect "hook: a dry run sets no pane-died hook" tmux_not_logged 'pane-died'
+
+new_case; run_real 1 CCORCH_MAX_PANES=abc
+expect "hook: a refusal sets none" tmux_not_logged 'remain-on-exit'
+
+new_case; run_real 1 'CCORCH_PARENT_CHANNEL=bad;channel'
+expect "hook: a channel that is not plain sets none" tmux_not_logged 'remain-on-exit'
+expect "hook: a channel that is not plain still starts claude" claude_started
+
+# If remain-on-exit cannot be unset, the hook stays so that it can still close the pane.
+new_case; run_real 1 FAKE_TMUX_FAIL_ON='set-option -u'
+expect "hook: option unset fails, the hook is left in place" tmux_not_logged 'set-hook -u -p'
+
+# If the hook cannot be set, remain-on-exit is taken back at once, and nothing is left to unset.
+new_case; run_real 1 FAKE_TMUX_FAIL_ON='set-hook -p'
+expect "hook: set-hook fails, remain-on-exit is unset again" tmux_logged 'set-option -u -p -t %99 remain-on-exit'
+expect "hook: set-hook fails, claude still starts" claude_started
+
+# --- scripts/ccorch-pane-died.sh, as the hook runs it ---
+
+PANE_DIED="${HERE}/../scripts/ccorch-pane-died.sh"
+# pane_died <copy_result> <depth> — run on ${WORK_DIR}/p.md
+pane_died() { bash "$PANE_DIED" "${WORK_DIR}/p.md" "$WORK_DIR" "$1" "$2" < /dev/null; }
+
+new_case; pane_died 1 1
+expect "pane-died, no result: status: error" grep -qxF 'status: error' "${WORK_DIR}/p.md"
+expect "pane-died, no result: one status line" test "$(grep -c '^status:' "${WORK_DIR}/p.md")" = 1
+expect "pane-died, Main Brain: result.md is a copy" cmp -s "${WORK_DIR}/p.md" "${WORK_DIR}/result.md"
+expect "pane-died: no temporary file left" no_files "${WORK_DIR}"/*.tmp
+
+new_case; printf 'pane result\n' > "${WORK_DIR}/p.md"; pane_died 1 1
+expect "pane-died, result present: untouched" file_is "${WORK_DIR}/p.md" 'pane result'
+expect "pane-died, result present, Main Brain: copied to result.md" file_is "${WORK_DIR}/result.md" 'pane result'
+
+new_case; printf 'earlier\n' > "${WORK_DIR}/result.md"; pane_died 1 1
+expect "pane-died: an existing result.md is not replaced" file_is "${WORK_DIR}/result.md" 'earlier'
+
+new_case; pane_died 0 2
+expect "pane-died, child: status: error" grep -qxF 'status: error' "${WORK_DIR}/p.md"
+expect "pane-died, child: no result.md" test ! -e "${WORK_DIR}/result.md"
+
+new_case; : > "${WORK_DIR}/p.md"; CCORCH_PUBLISH_GRACE=0 pane_died 0 3
+expect "pane-died, empty result file: replaced by the error" grep -qxF 'status: error' "${WORK_DIR}/p.md"
+
+new_case; pane_died 0 '9
+status: success'
+expect "pane-died, odd depth: one status line" test "$(grep -c '^status:' "${WORK_DIR}/p.md")" = 1
+expect "pane-died, odd depth: depth x" grep -qxF 'depth: x' "${WORK_DIR}/p.md"
 
 echo
 echo "${PASS} passed, ${FAIL} failed"
