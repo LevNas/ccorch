@@ -46,7 +46,7 @@ ccorch-wrapper.sh <task_description>
    - write `<id>.pane`, `<id>.depth` and `<id>.parent` (not in a dry run), release the lock
    - a refusal writes `status: refused` with a `reason:` line to the result file and exits 1; the trap signals the parent
 5. Set the pane title; write the status dashboard (depth 1); build the system prompt.
-6. Build the `claude` argv: `--permission-mode auto`, `--disallowedTools` with one rule per element, `--append-system-prompt`.
+6. Build the `claude` argv: `--add-dir` with `OUT_DIR`, `--permission-mode auto`, `--disallowedTools` with one rule per element, `--append-system-prompt`.
 7. Dry run: write the prompt to `$OUT_DIR/<id>.dry-run.system-prompt`, print `gate: ok` and the argv, exit 0. The trap writes `status: dry-run` into `OUT_DIR` and does not signal. The live `WORK_DIR` is only read: no lock, no records, no new files.
 8. Write the task file, start the watchdog and the task delivery subshell, run `claude` interactively and keep its exit status.
 9. After `claude` exits: stop the watchdog. If no result file exists, write `status: error` with the exit code when it was non-zero, and `status: incomplete` when it was 0 (never `success`). The trap signals the parent.
@@ -55,6 +55,7 @@ ccorch-wrapper.sh <task_description>
 
 | Flag | Value |
 |------|-------|
+| `--add-dir` | `OUT_DIR` (the session directory; a temporary directory in a dry run) at every depth, so the file tools can read and write `status.md` and result files outside the project; placed before the other flags because it takes several paths |
 | `--permission-mode` | `auto` at every depth |
 | `--disallowedTools`, every depth | `Bash(rm -rf *)` `Bash(rm -fr *)` `Bash(rm -Rf *)` `Bash(rm -r -f *)` `Bash(rm -f -r *)` `Bash(rm -r --force *)` `Bash(rm --recursive *)` `Bash(git push --force *)` `Bash(git push *--force*)` `Bash(git push -f *)` `Bash(git push * -f*)` `Bash(git push * +*)` `Bash(git push *--delete*)` `Bash(git push * :*)` `Bash(git branch -D *)` `Bash(git reset --hard *)` `Bash(git clean *)` `Bash(sudo *)` |
 | `--disallowedTools`, depth 2 and 3 | adds `Bash(git push *)` and `Bash(git -C * push*)` |

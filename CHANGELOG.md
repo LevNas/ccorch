@@ -2,6 +2,25 @@
 
 Earlier versions: see the git history.
 
+## 0.6.2 — 2026-10-05
+
+A problem found by the 0.6.1 live check (refs #11).
+
+### Fixed
+
+- **Panes stopped at their first read of the session directory.** 0.6.1 has panes write
+  `status.md` and result files with the Read and Write tools. The session directory
+  (`/tmp/ccorch/<id>`) is outside the project, and in the live check (Claude Code
+  v2.1.288) the Main Brain's first Read of `status.md` asked "Allow this read outside the
+  working directories?" in auto mode, so the pane waited for a human. The 0.6.0 live check
+  did not stop there, probably because 0.6.0 wrote these files with shell commands rather
+  than the file tools. The wrapper now
+  passes the session directory to `claude` with `--add-dir`, at every depth. This is
+  expected to stop the prompt (`--add-dir` gives the tools access to that directory); it has
+  not been checked live yet.
+- The live check stopped at that prompt, before any `mv` or completion signal, so 0.6.1's
+  changes have not been checked live yet.
+
 ## 0.6.1 — 2026-10-04
 
 Two problems found by the 0.6.0 live check (refs #11).
