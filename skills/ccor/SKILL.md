@@ -90,8 +90,10 @@ result file exists, it copies that file to `${WORK_DIR}/result.md` and signals `
 Turns that end before the result file exists send no signal. (Children and grandchildren
 signal their parent at every turn instead; the parent checks for their result file and
 waits again.) The Main Brain's session stays
-open after that; the wrapper finishes when the pane is closed or `CCORCH_TIMEOUT` runs out,
-and then copies the result again if it was rewritten.
+open after that; the wrapper finishes when the pane is closed, and then copies the result
+again if it was rewritten. `CCORCH_TIMEOUT` does not close it: the watchdog acts only on a
+pane that has written no result, so a finished Main Brain's pane stays open until it is
+closed (step 7).
 
 ### 5. Background Completion Wait
 

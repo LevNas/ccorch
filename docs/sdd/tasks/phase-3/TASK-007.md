@@ -6,7 +6,9 @@ refusals of DEC-006. The plugin was updated from 0.5.0 to 0.6.0 from the marketp
 `claude plugin update ccorch@levnas-plugins`; a fresh `/plugin install` (step 1) was not run.
 Steps 2, 4, 5 and 6 have not been run live. The 0.6.1 live check (2026-10-05) stopped at a
 read-outside-the-working-directories prompt, fixed in 0.6.2; the 0.6.2 live check the same day passed
-(issue #11), but it started the Main Brain with a script, not `/ccor`.
+(issue #11), but it started the Main Brain with a script, not `/ccor`. The 0.6.3 live check the
+same day ran `/ccor` typed by the user, a child that runs and a SIGKILLed child (DEC-006,
+Consequences); steps 4 and 5 are still not run live.
 
 ## Description
 Verify that the complete flow works end-to-end: plugin installation, skill invocation, pane creation, task execution, and result retrieval.
@@ -46,10 +48,10 @@ Verify that the complete flow works end-to-end: plugin installation, skill invoc
 
 ## Acceptance Criteria
 - [ ] Plugin installs successfully from marketplace (only an update from the marketplace was run, 2026-10-04)
-- [ ] Precondition checks work correctly
-- [ ] Basic orchestration completes with result.md (partly, 0.6.0, 2026-10-04: the Main Brain pane ran and `result.md` matched its result, but only after a human sent `/exit`, and both runs stopped once at a user's ask rule on `mv` until a human answered; the return to interactive mode and the completion notification were not checked. 0.6.2, 2026-10-05: `result.md` existed at the first signal, while the Main Brain was still running, with no prompt and no `/exit`; the Main Brain was started by a script and a logger received the signal, so `/ccor`'s return to interactive mode and its notification are still not checked)
-- [ ] Depth limit is enforced
-- [ ] Timeout mechanism works
+- [ ] Precondition checks work correctly (partly, 0.6.3, 2026-10-05: `/ccor` in a session with no `TMUX` stopped at step 1 with "Error: Must run inside a tmux session". `/ccor` with no task has no usage-hint step in SKILL.md, and it was not observed)
+- [ ] Basic orchestration completes with result.md (0.6.3, 2026-10-05, with `/ccor` typed by the user in a session in accept-edits mode: the wait loop ran in the background and the session's turn ended before the notification; the notification came when `result.md` appeared; the result was presented and the session asked before closing the Main Brain's pane; `git status` of the project was the same before and after. Not checked off, because two commands in that session stopped for approval: one the session composed itself to show the result, and step 7's own close loop. Earlier: 0.6.0, 2026-10-04: the Main Brain pane ran and `result.md` matched its result, but only after a human sent `/exit`, and both runs stopped once at a user's ask rule on `mv` until a human answered; the return to interactive mode and the completion notification were not checked. 0.6.2, 2026-10-05: `result.md` existed at the first signal, while the Main Brain was still running, with no prompt and no `/exit`; the Main Brain was started by a script and a logger received the signal, so `/ccor`'s return to interactive mode and its notification are still not checked)
+- [ ] Depth limit is enforced (not run live; grandchildren were left out to keep two panes at a time)
+- [ ] Timeout mechanism works (not run live. 0.6.3, 2026-10-05: a finished Main Brain's pane stayed open past `CCORCH_TIMEOUT`, consistent with the watchdog acting only on a pane with no result)
 
 ## Notes
 - This is a manual smoke test, not automated
