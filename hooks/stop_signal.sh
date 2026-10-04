@@ -4,22 +4,24 @@
 # Only acts inside ccorch orchestration (CCORCH_PARENT_CHANNEL is set).
 # No-op for normal Claude Code sessions.
 #
-# Stop fires at the end of every turn, not only when the pane is done. The pane's
-# result file is the completion signal: until it exists and is non-empty, the parent
-# is not woken (it would find nothing to read). A pane started by an older wrapper
-# has no CCORCH_RESULT_FILE; it signals on every Stop, as before.
+# Stop fires at the end of every turn, not only when the pane is done.
 #
-# For the Main Brain (CCORCH_COPY_RESULT=1), the result is also copied to
-# ${CCORCH_WORK_DIR}/result.md before the signal, so the user's session can read it
-# while the Main Brain's session is still open. Each Stop after a rewrite copies again.
+# - Child and Grandchild panes signal their parent at every Stop, as before: a parent
+#   (a model) checks the child's result file and waits again when there is none, so a
+#   child that is stuck still reaches it.
+# - The session's Main Brain (CCORCH_COPY_RESULT=1) signals the user's session only once
+#   its result file exists and is non-empty, after copying it to
+#   ${CCORCH_WORK_DIR}/result.md, so that session has something to read. Each later Stop
+#   copies again, so a rewritten result is followed.
 
 [ -n "${CCORCH_PARENT_CHANNEL:-}" ] || exit 0
 
-if [ -n "${CCORCH_RESULT_FILE:-}" ]; then
+if [ "${CCORCH_COPY_RESULT:-}" = 1 ] && [ -n "${CCORCH_RESULT_FILE:-}" ]; then
   [ -s "$CCORCH_RESULT_FILE" ] || exit 0
-  if [ "${CCORCH_COPY_RESULT:-}" = 1 ] && [ -n "${CCORCH_WORK_DIR:-}" ]; then
-    { cp "$CCORCH_RESULT_FILE" "${CCORCH_WORK_DIR}/result.md.tmp" \
-        && mv "${CCORCH_WORK_DIR}/result.md.tmp" "${CCORCH_WORK_DIR}/result.md"; } 2>/dev/null || true
+  if [ -n "${CCORCH_WORK_DIR:-}" ]; then
+    tmp="${CCORCH_WORK_DIR}/result.md.hook-$$.tmp"
+    { cp "$CCORCH_RESULT_FILE" "$tmp" && mv "$tmp" "${CCORCH_WORK_DIR}/result.md"; } 2>/dev/null \
+      || rm -f "$tmp" 2>/dev/null
   fi
 fi
 

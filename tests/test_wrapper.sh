@@ -63,6 +63,8 @@ printf 'CCORCH_COPY_RESULT=%s\nCCORCH_RESULT_FILE=%s\n' \
   "${CCORCH_COPY_RESULT-unset}" "${CCORCH_RESULT_FILE-unset}" > "$FAKE_CLAUDE_ENV"
 if [ -n "${FAKE_CLAUDE_WRITE:-}" ]; then
   printf '%s\n' "$FAKE_CLAUDE_WRITE" > "$CCORCH_RESULT_FILE"
+elif [ -n "${FAKE_CLAUDE_EMPTY:-}" ]; then
+  : > "$CCORCH_RESULT_FILE"
 fi
 exit "${FAKE_CLAUDE_RC:-0}"
 EOF
@@ -121,7 +123,7 @@ new_case() {
   export FAKE_WORK_DIR="$WORK_DIR"
   export FAKE_CLAUDE_RC=0
   export FAKE_LIST_DELAY=0
-  unset FAKE_LIST_KILL FAKE_PANE_ID FAKE_CLAUDE_WRITE
+  unset FAKE_LIST_KILL FAKE_PANE_ID FAKE_CLAUDE_WRITE FAKE_CLAUDE_EMPTY
   : > "$FAKE_PANES_FILE"
   : > "$FAKE_TMUX_LOG"
   live %99   # the fake current pane must be alive: the gate refuses otherwise
@@ -521,12 +523,18 @@ new_case; run_real 2
 expect "a child's refusal does not write result.md" test ! -e "${WORK_DIR}/result.md"
 
 # A stale result.md (an earlier hook copy) is replaced when the result file was rewritten.
+# The comparison is by content, so this holds within the same second as the old copy.
 new_case
 printf 'old copy\n' > "${WORK_DIR}/result.md"
-touch -d '1 minute ago' "${WORK_DIR}/result.md"
 run_real 1 FAKE_CLAUDE_WRITE='final result'
 expect "result rewritten after the hook's copy: result.md holds the final result" \
   file_is "${WORK_DIR}/result.md" 'final result'
+expect "wrapper's copy leaves no temporary file" no_files "${WORK_DIR}"/result.md.*.tmp
+
+# An empty result file counts as no result: the wrapper writes its own, and result.md gets it.
+new_case; run_real 1 FAKE_CLAUDE_EMPTY=1
+expect "empty result file: the wrapper writes status: incomplete" result_has 'status: incomplete'
+expect "empty result file: result.md is not empty" test -s "${WORK_DIR}/result.md"
 
 # --- The Stop hook's environment ---
 
@@ -704,9 +712,17 @@ PROMPT_FILE="${RESULT_DIR}/$(child_id).dry-run.system-prompt"
 expect_not "depth 1 prompt: no 'mv \"' instruction" grep -qF 'mv "' "$PROMPT_FILE"
 expect_not "depth 1 prompt: no temporary .tmp file" grep -qF '.tmp' "$PROMPT_FILE"
 expect "depth 1 prompt: files are written with the Write tool" grep -qF 'with the Write tool' "$PROMPT_FILE"
-expect "depth 1 prompt: the result file is the completion signal" grep -qF 'Writing that file is what tells your parent you are done' "$PROMPT_FILE"
+expect "depth 1 prompt: the result file is written once, at the end" grep -qF 'once, at the end' "$PROMPT_FILE"
+expect "depth 1 prompt: cleanup skips the Main Brain's own pane" grep -qF 'Never close your own pane' "$PROMPT_FILE"
+expect "depth 1 prompt: a signal without a result file means wait again" grep -qF 'wait on its channel again' "$PROMPT_FILE"
 
-# --- Stop hook: signals only once the result file exists ---
+new_case; seed_parent 2; run_dry 2 CCORCH_PARENT_ID=parent-1
+PROMPT_FILE="${RESULT_DIR}/$(child_id).dry-run.system-prompt"
+expect "depth 2 prompt: cleanup comes before the result, not of its own pane" grep -qF 'never your own' "$PROMPT_FILE"
+expect "depth 2 prompt: a signal without a result file means wait again" grep -qF 'wait on its channel again' "$PROMPT_FILE"
+expect_not "depth 2 prompt: no 'mv \"' instruction" grep -qF 'mv "' "$PROMPT_FILE"
+
+# --- Stop hook: the Main Brain signals only once its result exists; others every turn ---
 
 HOOK="${HERE}/../hooks/stop_signal.sh"
 
@@ -720,30 +736,35 @@ signalled() { grep -qxF 'wait-for -S test-channel' "$FAKE_TMUX_LOG"; }
 new_case; run_hook
 expect_not "hook outside ccorch: no signal" signalled
 
-new_case; run_hook CCORCH_PARENT_CHANNEL=test-channel CCORCH_RESULT_FILE="${WORK_DIR}/r.md"
-expect_not "hook, result file absent: no signal" signalled
+# run_mb_hook — the hook as the session's Main Brain, with its result file at r.md.
+run_mb_hook() {
+  run_hook CCORCH_PARENT_CHANNEL=test-channel CCORCH_RESULT_FILE="${WORK_DIR}/r.md" \
+    CCORCH_COPY_RESULT=1 CCORCH_WORK_DIR="$WORK_DIR"
+}
 
-new_case; : > "${WORK_DIR}/r.md"
-run_hook CCORCH_PARENT_CHANNEL=test-channel CCORCH_RESULT_FILE="${WORK_DIR}/r.md"
-expect_not "hook, result file empty: no signal" signalled
+new_case; run_mb_hook
+expect_not "hook, Main Brain, result file absent: no signal" signalled
+expect "hook, Main Brain, result file absent: no result.md" test ! -e "${WORK_DIR}/result.md"
 
-new_case; printf 'done\n' > "${WORK_DIR}/r.md"
-run_hook CCORCH_PARENT_CHANNEL=test-channel CCORCH_RESULT_FILE="${WORK_DIR}/r.md" CCORCH_WORK_DIR="$WORK_DIR"
-expect "hook, result file written: signals the parent" signalled
-expect "hook, child (no CCORCH_COPY_RESULT): no result.md" test ! -e "${WORK_DIR}/result.md"
+new_case; : > "${WORK_DIR}/r.md"; run_mb_hook
+expect_not "hook, Main Brain, result file empty: no signal" signalled
+expect "hook, Main Brain, result file empty: no result.md" test ! -e "${WORK_DIR}/result.md"
+
+# A child signals at every turn, with or without a result, so a stuck child still wakes
+# its parent; it never writes result.md.
+new_case
+run_hook CCORCH_PARENT_CHANNEL=test-channel CCORCH_RESULT_FILE="${WORK_DIR}/r.md" CCORCH_COPY_RESULT= CCORCH_WORK_DIR="$WORK_DIR"
+expect "hook, child, no result yet: signals the parent" signalled
+expect "hook, child: no result.md" test ! -e "${WORK_DIR}/result.md"
 
 new_case; run_hook CCORCH_PARENT_CHANNEL=test-channel
 expect "hook from an older wrapper (no CCORCH_RESULT_FILE): signals as before" signalled
 
-new_case; printf 'first\n' > "${WORK_DIR}/r.md"
-run_hook CCORCH_PARENT_CHANNEL=test-channel CCORCH_RESULT_FILE="${WORK_DIR}/r.md" \
-  CCORCH_COPY_RESULT=1 CCORCH_WORK_DIR="$WORK_DIR"
+new_case; printf 'first\n' > "${WORK_DIR}/r.md"; run_mb_hook
 expect "hook, Main Brain: result.md is a copy of the result file" cmp -s "${WORK_DIR}/r.md" "${WORK_DIR}/result.md"
 expect "hook, Main Brain: signals after copying" signalled
-expect "hook, Main Brain: no temporary file left" test ! -e "${WORK_DIR}/result.md.tmp"
-printf 'second\n' > "${WORK_DIR}/r.md"
-run_hook CCORCH_PARENT_CHANNEL=test-channel CCORCH_RESULT_FILE="${WORK_DIR}/r.md" \
-  CCORCH_COPY_RESULT=1 CCORCH_WORK_DIR="$WORK_DIR"
+expect "hook, Main Brain: no temporary file left" no_files "${WORK_DIR}"/result.md.*.tmp
+printf 'second\n' > "${WORK_DIR}/r.md"; run_mb_hook
 expect "hook, Main Brain rewrote its result: result.md follows" file_is "${WORK_DIR}/result.md" 'second'
 
 echo

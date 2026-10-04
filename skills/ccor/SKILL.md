@@ -82,26 +82,33 @@ Where `${TASK}` is the user's task description passed to `/ccor`.
 **Important**: The Main Brain's system prompt (injected by the wrapper script) instructs it to:
 - Analyze the task and decompose into subtasks
 - Create child panes for independent subtasks
-- Wait for children to complete, then close their panes
+- Wait for children to complete, then close their panes (not its own)
 - Write its result file once, at the end, with the Write tool
 
 The ccorch Stop hook does the rest. At the end of the first turn in which the Main Brain's
 result file exists, it copies that file to `${WORK_DIR}/result.md` and signals `${CHANNEL}`.
-Turns that end before the result file exists send no signal. The Main Brain's session stays
+Turns that end before the result file exists send no signal. (Children and grandchildren
+signal their parent at every turn instead; the parent checks for their result file and
+waits again.) The Main Brain's session stays
 open after that; the wrapper finishes when the pane is closed or `CCORCH_TIMEOUT` runs out,
 and then copies the result again if it was rewritten.
 
 ### 5. Background Completion Wait
 
 Use `run_in_background: true` to wait for the Main Brain's completion signal without blocking the user's session.
-Wait again until `result.md` exists, so an early signal (from a pane started by an older wrapper or hook) is not read as the result:
+Wait again until `result.md` exists, so an early signal (from a pane started by an older wrapper or hook) is not read as the result.
+Shell variables do not carry over between Bash calls, so set the two values in the same command, with the literal session ID from step 2:
 
 ```bash
 # Run in background — user continues working
-until [ -f "${WORK_DIR}/result.md" ]; do tmux wait-for "$CHANNEL"; done
+WORK_DIR=/tmp/ccorch/<session_id>; CHANNEL=CCORCH_DONE_<session_id>
+until [ -f "${WORK_DIR}/result.md" ]; do
+  tmux wait-for "$CHANNEL" || { echo "tmux wait-for failed; see ${WORK_DIR}" >&2; exit 1; }
+done
 ```
 
 A signal sent before the wait starts is not lost: tmux keeps it for the next `wait-for` on the channel.
+If `tmux wait-for` fails (the tmux server is gone, or the channel name is empty), the loop stops instead of spinning; check `${WORK_DIR}` by hand.
 
 After `result.md` exists, read and present the results:
 
