@@ -165,7 +165,7 @@ mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
 ```
 ccorch/
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin metadata (v0.6.1)
+│   └── plugin.json              # Plugin metadata (v0.6.2)
 ├── hooks/
 │   ├── hooks.json               # Stop hook registration
 │   └── stop_signal.sh           # Signals the parent pane on Stop (the Main Brain: once its result exists)

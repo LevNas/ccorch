@@ -16,10 +16,15 @@ A problem found by the 0.6.1 live check (refs #11).
   did not stop there, probably because 0.6.0 wrote these files with shell commands rather
   than the file tools. The wrapper now
   passes the session directory to `claude` with `--add-dir`, at every depth. This is
-  expected to stop the prompt (`--add-dir` gives the tools access to that directory); it has
-  not been checked live yet.
-- The live check stopped at that prompt, before any `mv` or completion signal, so 0.6.1's
-  changes have not been checked live yet.
+  expected to stop the prompt (`--add-dir` gives the tools access to that directory); it had
+  not been checked live at release.
+- The 0.6.1 live check stopped at that prompt, before any `mv` or completion signal, so at
+  release 0.6.1's changes had not been checked live.
+- (Since then, the 0.6.2 live check on 2026-10-05 showed, for one Main Brain: no prompt for
+  the file tools in the session directory (`--add-dir`), result writes with the Write tool
+  and no `mv`, and `result.md` present at the first signal. Not exercised: a child that runs,
+  `/ccor`'s wait loop, a Grandchild, a denied command. See
+  [DEC-006](docs/sdd/design/decisions/DEC-006.md) and #11.)
 
 ## 0.6.1 — 2026-10-04
 

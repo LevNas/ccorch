@@ -88,9 +88,11 @@ Write tool (or Edit), never with `mv` or shell redirection: a user's ask rule on
 (for example `Bash(mv *)`) overrides auto mode and stopped the pane in the 0.6.0 live check.
 The Write tool is not atomic. An empty result file counts as no result (see below); a
 partly written one could only be read if the pane were killed in the middle of the write.
-The result file lives under `/tmp/ccorch/`, outside the pane's project directory; the
-live check saw the Write tool allowed there in auto mode, but an ask rule on Write or Edit
-would stop the pane the same way.
+The result file lives under `/tmp/ccorch/`, outside the pane's project directory. The
+0.6.0 live check saw a child's Write allowed there in auto mode; in the 0.6.1 live check a
+Read there asked for approval, so 0.6.2 passes the directory with `--add-dir`, and the
+0.6.2 live check saw Read and Write there with no prompt. An ask rule on Write or Edit
+would still stop the pane the same way.
 
 ### Completion signal: the Stop hook and `result.md`
 

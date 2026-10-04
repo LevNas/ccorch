@@ -58,7 +58,7 @@ All implementation details have been defined in the design phase.
 
 | Risk | Impact | Probability | Mitigation |
 |------|--------|-------------|------------|
-| `--disallowedTools` Bash pattern syntax or auto-mode behaviour changes in future Claude Code versions | Medium | Low | Pin to documented syntax; `tests/test_wrapper.sh` checks the arguments; the live check is manual (passed 2026-10-04 on 0.6.0; the 2026-10-05 run on 0.6.1 stopped at a read-outside-the-working-directories prompt, fixed in 0.6.2; #11) and should be repeated after a Claude Code upgrade |
+| `--disallowedTools` Bash pattern syntax or auto-mode behaviour changes in future Claude Code versions | Medium | Low | Pin to documented syntax; `tests/test_wrapper.sh` checks the arguments; the live check is manual (passed 2026-10-04 on 0.6.0; the 2026-10-05 run on 0.6.1 stopped at a read-outside-the-working-directories prompt, fixed in 0.6.2, and the 0.6.2 run the same day passed; #11) and should be repeated after a Claude Code upgrade |
 | tmux wait-for channel name collision across concurrent sessions | Low | Low | Session ID includes timestamp |
 | Wrapper script quoting issues with complex task descriptions | Medium | Medium | Test with special characters, use heredoc |
 
