@@ -4,7 +4,9 @@
 IN PROGRESS. The 0.6.0 live check on 2026-10-04 (issue #11) covered part of step 3 and the limit
 refusals of DEC-006. The plugin was updated from 0.5.0 to 0.6.0 from the marketplace with
 `claude plugin update ccorch@levnas-plugins`; a fresh `/plugin install` (step 1) was not run.
-Steps 2, 4, 5 and 6 have not been run live, and 0.6.1 has not had a live check.
+Steps 2, 4, 5 and 6 have not been run live. The 0.6.1 live check (2026-10-05) stopped at a
+read-outside-the-working-directories prompt, fixed in 0.6.2; the 0.6.2 live check the same day passed
+(issue #11), but it started the Main Brain with a script, not `/ccor`.
 
 ## Description
 Verify that the complete flow works end-to-end: plugin installation, skill invocation, pane creation, task execution, and result retrieval.
@@ -45,7 +47,7 @@ Verify that the complete flow works end-to-end: plugin installation, skill invoc
 ## Acceptance Criteria
 - [ ] Plugin installs successfully from marketplace (only an update from the marketplace was run, 2026-10-04)
 - [ ] Precondition checks work correctly
-- [ ] Basic orchestration completes with result.md (partly, 0.6.0, 2026-10-04: the Main Brain pane ran and `result.md` matched its result, but only after a human sent `/exit`, and both runs stopped once at a user's ask rule on `mv` until a human answered; the return to interactive mode and the completion notification were not checked)
+- [ ] Basic orchestration completes with result.md (partly, 0.6.0, 2026-10-04: the Main Brain pane ran and `result.md` matched its result, but only after a human sent `/exit`, and both runs stopped once at a user's ask rule on `mv` until a human answered; the return to interactive mode and the completion notification were not checked. 0.6.2, 2026-10-05: `result.md` existed at the first signal, while the Main Brain was still running, with no prompt and no `/exit`; the Main Brain was started by a script and a logger received the signal, so `/ccor`'s return to interactive mode and its notification are still not checked)
 - [ ] Depth limit is enforced
 - [ ] Timeout mechanism works
 

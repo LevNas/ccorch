@@ -20,6 +20,9 @@ A problem found by the 0.6.1 live check (refs #11).
   not been checked live yet.
 - The live check stopped at that prompt, before any `mv` or completion signal, so 0.6.1's
   changes have not been checked live yet.
+- (The 0.6.2 live check ran on 2026-10-05 and passed. It also covered 0.6.1's Main Brain
+  signal and Write-tool changes, but not a child that runs; see
+  [DEC-006](docs/sdd/design/decisions/DEC-006.md) and #11.)
 
 ## 0.6.1 — 2026-10-04
 
