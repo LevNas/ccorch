@@ -86,9 +86,9 @@ Runs as a background subshell, started after the gate and the dry-run exit:
 
 ### Child ID Generation
 
-`depth${DEPTH}-$(date +%s%N | cut -c 11-16)` produces IDs like `depth2-483921`:
+`depth${DEPTH}-$$-${RANDOM}` produces IDs like `depth2-48392-17011`:
 - Includes depth for debugging
-- Nanosecond digits reduce collisions on fast sequential launches
+- PID and `$RANDOM` work on macOS, where BSD `date` has no `%N`. IDs must be unique: the gate pairs `<id>.pane` with `<id>.parent`, and a shared ID would let panes overwrite each other's files
 
 ## Tests
 

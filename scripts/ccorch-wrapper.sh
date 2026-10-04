@@ -50,8 +50,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Change to the user's project directory — all agents must run in the same context
 cd "$PROJECT_DIR" || { echo "Error: Cannot cd to $PROJECT_DIR"; exit 1; }
 
-# Generate unique child ID
-CHILD_ID="depth${DEPTH}-$(date +%s%N | cut -c 11-16)"
+# Generate unique child ID. PID and $RANDOM, not date +%N: BSD date has no %N, and a
+# shared ID would make panes overwrite each other's .pane/.parent files and defeat the gate.
+CHILD_ID="depth${DEPTH}-$$-${RANDOM}"
 RESULT_FILE="${WORK_DIR}/${CHILD_ID}.md"
 PANE_ID_FILE="${WORK_DIR}/${CHILD_ID}.pane"
 PARENT_ID_FILE="${WORK_DIR}/${CHILD_ID}.parent"
@@ -285,7 +286,7 @@ Write atomically: cat > \"${STATUS_FILE}.tmp\" ... && mv \"${STATUS_FILE}.tmp\" 
 - Children run at DEPTH=2, may create at most ${MAX_CHILDREN_D2} grandchildren each, and cannot push (\`git push\` is denied below the Main Brain)
 - More panes does NOT mean faster — host memory and disk I/O become bottlenecks, making ALL panes slower
 - If you have more subtasks than the limit, run them in batches: launch ${MAX_CHILDREN_D1}, wait for completion, then launch the next batch
-- Check current pane count: \`ls ${WORK_DIR}/*.pane 2>/dev/null | wc -l\`
+- The wrapper counts only live panes, so closing a finished child's pane frees its slot
 
 ## File Ownership
 When delegating subtasks, assign **directory-level ownership** to each child:
@@ -313,7 +314,7 @@ If the task involves code changes that could conflict between children:
 After all children have completed and results are aggregated:
 1. List completed panes: \`ls ${WORK_DIR}/*.pane\`
 2. Close each pane: \`tmux kill-pane -t <pane_id>\` (read pane ID from .pane files)
-3. Clean up pane ID files: \`rm ${WORK_DIR}/*.pane\`
+3. Leave the \`.pane\` files in place (the wrapper ignores dead panes, and your own record is among them)
 4. Update the status dashboard to reflect cleanup"
 
 elif [ "$DEPTH" -eq 2 ]; then
