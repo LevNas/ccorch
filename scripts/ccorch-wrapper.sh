@@ -25,9 +25,10 @@
 #   CCORCH_MAX_CHILDREN_D1 — Max children for Main Brain/DEPTH=1 (default: 3)
 #   CCORCH_MAX_CHILDREN_D2 — Max children for Child/DEPTH=2 (default: 2)
 #   CCORCH_PARENT_PANE    — Parent's tmux pane ID (reserved for future layout use)
-#   CCORCH_PARENT_ID      — Parent's child ID; required at depth 2 and 3, unset at depth 1
-#   CCORCH_DRY_RUN        — If set, run the start gate, print the claude argv, and exit
-#                           without starting claude
+#   CCORCH_PARENT_ID      — Parent's child ID; required at depth 2 and 3, unset at depth 1.
+#                           The depth must equal the parent's recorded depth + 1.
+#   CCORCH_DRY_RUN        — If set, run the start gate (no records written), print the
+#                           claude argv, and exit without starting claude
 
 set -euo pipefail
 
@@ -44,6 +45,9 @@ MAX_PANES="${CCORCH_MAX_PANES:-8}"
 MAX_CHILDREN_D1="${CCORCH_MAX_CHILDREN_D1:-3}"
 MAX_CHILDREN_D2="${CCORCH_MAX_CHILDREN_D2:-2}"
 
+# The result file, the lock and the pane records all live here; create it on every path.
+mkdir -p "$WORK_DIR"
+
 # Resolve the directory where this script lives (for child pane references)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -51,18 +55,33 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR" || { echo "Error: Cannot cd to $PROJECT_DIR"; exit 1; }
 
 # Generate unique child ID. PID and $RANDOM, not date +%N: BSD date has no %N, and a
-# shared ID would make panes overwrite each other's .pane/.parent files and defeat the gate.
+# shared ID would make panes overwrite each other's .pane/.parent/.depth files and
+# defeat the gate.
 CHILD_ID="depth${DEPTH}-$$-${RANDOM}"
 RESULT_FILE="${WORK_DIR}/${CHILD_ID}.md"
 PANE_ID_FILE="${WORK_DIR}/${CHILD_ID}.pane"
 PARENT_ID_FILE="${WORK_DIR}/${CHILD_ID}.parent"
+DEPTH_FILE="${WORK_DIR}/${CHILD_ID}.depth"
 PARENT_ID="${CCORCH_PARENT_ID:-}"
 DRY_RUN="${CCORCH_DRY_RUN:-}"
+LOCK_DIR="${WORK_DIR}/.lock.d"
+LOCK_HELD=""
+
+release_lock() {
+  if [ -n "$LOCK_HELD" ]; then
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    LOCK_HELD=""
+  fi
+}
 
 # --- Signal guarantee via trap ---
 # The trap must exist before the start gate so that a refusal reaches the parent.
+# Bash keeps one EXIT trap: anything that must happen on exit, such as releasing the
+# lock, goes through cleanup(), never through a second trap.
 
 cleanup() {
+  release_lock
+
   # Write a result if none exists yet: dry-run for a dry run, error otherwise
   if [ ! -f "$RESULT_FILE" ]; then
     local fallback_status="error" fallback_title="Error" fallback_body="Process terminated unexpectedly."
@@ -99,10 +118,14 @@ EOF
 trap cleanup EXIT
 
 # --- Start gate ---
-# Computed refusal before claude starts: the depth must be 1-3, the live ccorch
-# panes must stay within MAX_PANES, and the live siblings under one parent must
-# stay within the per-depth children limit. Limits are enforced here, not by
-# prompt text.
+# Computed refusal before claude starts. It checks that the limits are sane, that the
+# depth is 1-3 and follows from the parent's recorded depth, that the live ccorch panes
+# stay within MAX_PANES, and that the live siblings under one parent stay within the
+# per-depth children limit. Limits are enforced here, not by prompt text.
+#
+# What the gate bounds: a model that uses the documented launch command. A process that
+# rewrites its own environment, picks a new CCORCH_WORK_DIR, or runs claude directly
+# can still escape it. Against that, the boundary is the auto-mode classifier.
 
 refuse() {
   local reason="$1"
@@ -127,28 +150,103 @@ EOF
   exit 1
 }
 
-CURRENT_PANE_ID=$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)
-
-# Hold the lock from counting until the .pane/.parent files are written, so that
-# simultaneous starts cannot both pass. flock is from util-linux and is not on
-# macOS; without it the gate still runs, only without the lock.
-# fd 9 is closed again before any subshell or claude starts, so none inherits it.
-LOCKED=""
-if command -v flock >/dev/null 2>&1; then
-  mkdir -p "$WORK_DIR"
-  exec 9>"${WORK_DIR}/.lock"
-  flock 9
-  LOCKED=1
-else
-  echo "ccorch: warning: flock not found; the start gate runs without a lock" >&2
-fi
+# Fail closed: a limit that is not a positive integer would make every comparison
+# below meaningless.
+require_positive_int() {
+  case "$2" in
+    ''|*[!0-9]*|0*) refuse "$1 must be a positive integer (got '$2')" ;;
+  esac
+}
+require_positive_int CCORCH_MAX_PANES "$MAX_PANES"
+require_positive_int CCORCH_MAX_CHILDREN_D1 "$MAX_CHILDREN_D1"
+require_positive_int CCORCH_MAX_CHILDREN_D2 "$MAX_CHILDREN_D2"
 
 case "$DEPTH" in
   1|2|3) ;;
   *) refuse "CCORCH_DEPTH must be 1, 2 or 3 (got '${DEPTH}')" ;;
 esac
 
-LIVE_PANES=$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null || true)
+# Lock: mkdir is atomic and portable (flock is util-linux only). Held from counting until
+# the records are written, so simultaneous starts cannot both pass. A lock directory
+# older than a minute is treated as stale and removed once.
+acquire_lock() {
+  local tries=0 stale_cleared=""
+  while :; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      LOCK_HELD=1
+      return 0
+    fi
+    if [ -z "$stale_cleared" ] && [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      stale_cleared=1
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+      continue
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -gt 100 ]; then
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+acquire_lock || refuse "lock timeout: could not take ${LOCK_DIR} within 10s"
+
+CURRENT_PANE_ID=$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)
+
+# Fail closed: without the pane list every recorded pane would look dead.
+if ! LIVE_PANES=$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null); then
+  refuse "tmux list-panes failed; cannot tell which panes are alive"
+fi
+
+# Membership test without a pipe, so pipefail cannot turn a match into a failure.
+is_live() {
+  [ -n "$1" ] || return 1
+  case $'\n'"$LIVE_PANES"$'\n' in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Depth is derived from the parent's recorded depth, not taken from the environment.
+if [ -z "$PARENT_ID" ]; then
+  if [ "$DEPTH" != "1" ]; then
+    refuse "CCORCH_PARENT_ID is required at depth ${DEPTH}"
+  fi
+  # One Main Brain per session: refuse if another live depth-1 record exists.
+  for depth_file in "${WORK_DIR}"/*.depth; do
+    [ -e "$depth_file" ] || continue
+    [ "$(cat "$depth_file" 2>/dev/null || true)" = "1" ] || continue
+    other_pane=$(cat "${depth_file%.depth}.pane" 2>/dev/null || true)
+    [ "$other_pane" != "$CURRENT_PANE_ID" ] || continue
+    if is_live "$other_pane"; then
+      refuse "a Main Brain is already running in this session (pane ${other_pane})"
+    fi
+  done
+else
+  case "$PARENT_ID" in
+    *[!A-Za-z0-9_-]*) refuse "CCORCH_PARENT_ID contains characters other than letters, digits, '-' and '_'" ;;
+  esac
+  PARENT_PANE_FILE="${WORK_DIR}/${PARENT_ID}.pane"
+  PARENT_DEPTH_FILE="${WORK_DIR}/${PARENT_ID}.depth"
+  if [ ! -f "$PARENT_PANE_FILE" ] || [ ! -f "$PARENT_DEPTH_FILE" ]; then
+    refuse "no record of parent ${PARENT_ID} in ${WORK_DIR}"
+  fi
+  PARENT_PANE=$(cat "$PARENT_PANE_FILE" 2>/dev/null || true)
+  PARENT_DEPTH=$(cat "$PARENT_DEPTH_FILE" 2>/dev/null || true)
+  case "$PARENT_DEPTH" in
+    1|2) ;;
+    *) refuse "parent ${PARENT_ID} has an invalid recorded depth '${PARENT_DEPTH}'" ;;
+  esac
+  if ! is_live "$PARENT_PANE"; then
+    refuse "parent ${PARENT_ID} is not alive (pane '${PARENT_PANE}')"
+  fi
+  DERIVED_DEPTH=$((PARENT_DEPTH + 1))
+  if [ "$DEPTH" != "$DERIVED_DEPTH" ]; then
+    refuse "CCORCH_DEPTH=${DEPTH} disagrees with the parent's recorded depth ${PARENT_DEPTH} (expected ${DERIVED_DEPTH})"
+  fi
+fi
+# Every later decision (deny list, children limit, prompt) uses this depth.
+DEPTH="${DERIVED_DEPTH:-1}"
+CCORCH_DEPTH="$DEPTH"
 
 LIVE_COUNT=0
 SIBLING_COUNT=0
@@ -157,7 +255,7 @@ for pane_file in "${WORK_DIR}"/*.pane; do
   recorded_id=$(cat "$pane_file" 2>/dev/null || true)
   [ -n "$recorded_id" ] || continue
   [ "$recorded_id" != "$CURRENT_PANE_ID" ] || continue
-  printf '%s\n' "$LIVE_PANES" | grep -qxF -- "$recorded_id" || continue
+  is_live "$recorded_id" || continue
   LIVE_COUNT=$((LIVE_COUNT + 1))
   stem="${pane_file%.pane}"
   if [ -n "$PARENT_ID" ] && [ -f "${stem}.parent" ] \
@@ -174,23 +272,21 @@ fi
 if [ "$DEPTH" -ge 2 ]; then
   if [ "$DEPTH" -eq 2 ]; then CHILD_LIMIT="$MAX_CHILDREN_D1"; LIMIT_NAME="CCORCH_MAX_CHILDREN_D1"
   else CHILD_LIMIT="$MAX_CHILDREN_D2"; LIMIT_NAME="CCORCH_MAX_CHILDREN_D2"; fi
-  if [ -z "$PARENT_ID" ]; then
-    refuse "CCORCH_PARENT_ID is required at depth ${DEPTH}"
-  fi
   if [ $((SIBLING_COUNT + 1)) -gt "$CHILD_LIMIT" ]; then
     refuse "children limit reached: ${SIBLING_COUNT} live siblings under ${PARENT_ID}, ${LIMIT_NAME}=${CHILD_LIMIT}"
   fi
 fi
 
-echo "$CURRENT_PANE_ID" > "$PANE_ID_FILE"
-if [ -n "$PARENT_ID" ]; then
-  echo "$PARENT_ID" > "$PARENT_ID_FILE"
+# Records are written only for a real start: a dry run decides but leaves no trace in a
+# live session. The lock is released here either way, before any subshell or claude starts.
+if [ -z "$DRY_RUN" ]; then
+  echo "$CURRENT_PANE_ID" > "$PANE_ID_FILE"
+  echo "$DEPTH" > "$DEPTH_FILE"
+  if [ -n "$PARENT_ID" ]; then
+    echo "$PARENT_ID" > "$PARENT_ID_FILE"
+  fi
 fi
-
-if [ -n "$LOCKED" ]; then
-  flock -u 9
-  exec 9>&-
-fi
+release_lock
 
 # Set descriptive pane title based on depth
 if [ -z "$DRY_RUN" ]; then
@@ -207,8 +303,8 @@ fi
 
 STATUS_FILE="${WORK_DIR}/status.md"
 
-# Initialize status dashboard for Main Brain
-if [ "$DEPTH" -eq 1 ]; then
+# Initialize status dashboard for Main Brain (not in a dry run: it would overwrite a live one)
+if [ "$DEPTH" -eq 1 ] && [ -z "$DRY_RUN" ]; then
   cat > "${STATUS_FILE}.tmp" <<EOF
 # Orchestration Status
 
@@ -245,7 +341,7 @@ SYSTEM_PROMPT="You are a CCORCH worker at DEPTH=${DEPTH}.
 
 ## Permissions
 - This pane runs in auto mode. An action the auto-mode classifier blocks may need a human to approve it in this pane; if you are blocked, say so in your result file instead of retrying another way round
-- Some commands are denied by rule at this depth. Treat a denial as final"
+- The common forms of some commands are denied by rule at this depth. The rules catch the usual command form only, so they are not a complete block. Do not work around a denial by another route (such as \`sh -c\` or a full path): that is a rule you must follow, not something the rules enforce"
 
 if [ "$DEPTH" -eq 1 ]; then
   NEXT_DEPTH=2
@@ -283,7 +379,7 @@ Write atomically: cat > \"${STATUS_FILE}.tmp\" ... && mv \"${STATUS_FILE}.tmp\" 
 - You may create at most **${MAX_CHILDREN_D1} child panes** concurrently
 - At most **${MAX_PANES} live ccorch panes** in total, yourself included
 - The wrapper enforces both limits: a child started over a limit does not run and returns \`status: refused\` with the reason in its result file. Treat that as the child's result, not as an error to work around
-- Children run at DEPTH=2, may create at most ${MAX_CHILDREN_D2} grandchildren each, and cannot push (\`git push\` is denied below the Main Brain)
+- Children run at DEPTH=2, may create at most ${MAX_CHILDREN_D2} grandchildren each, and should not push: the usual forms of \`git push\` are denied below the Main Brain, and not working around that is a rule they must follow
 - More panes does NOT mean faster — host memory and disk I/O become bottlenecks, making ALL panes slower
 - If you have more subtasks than the limit, run them in batches: launch ${MAX_CHILDREN_D1}, wait for completion, then launch the next batch
 - The wrapper counts only live panes, so closing a finished child's pane frees its slot
@@ -329,7 +425,7 @@ If you need changes to shared files (package.json, etc.), note them in your resu
 - You may create at most **${MAX_CHILDREN_D2} grandchild panes** concurrently
 - At most **${MAX_PANES} live ccorch panes** in total
 - The wrapper enforces both limits: a grandchild started over a limit returns \`status: refused\` with the reason in its result file
-- \`git push\` is denied for you; only the Main Brain pushes
+- The usual forms of \`git push\` are denied for you; only the Main Brain pushes. Do not push by another route
 - More panes does NOT mean faster — host resources become the bottleneck
 - If you have more subtasks, run them in batches
 
@@ -351,7 +447,7 @@ else
   SYSTEM_PROMPT="${SYSTEM_PROMPT}
 
 ## Depth Limit
-You are at maximum depth (DEPTH=3). The Agent tool and \`tmux\` commands are denied for you, so you cannot create panes. \`git push\` is denied too.
+You are at maximum depth (DEPTH=3). The Agent tool and the usual forms of \`tmux\` commands are denied for you. You must not create panes by any route, and you must not push.
 Execute your assigned task directly and write results to ${RESULT_FILE}.
 
 ## File Ownership
@@ -416,8 +512,13 @@ CURRENT_PANE="$CURRENT_PANE_ID"
 # start gate above.
 DENY_RULES=(
   'Bash(rm -rf *)'
+  'Bash(rm -fr *)'
+  'Bash(rm -r -f *)'
+  'Bash(rm -f -r *)'
   'Bash(git push --force *)'
+  'Bash(git push *--force*)'
   'Bash(git push -f *)'
+  'Bash(git push * +*)'
   'Bash(git reset --hard *)'
   'Bash(git clean *)'
   'Bash(sudo *)'
@@ -438,7 +539,7 @@ CLAUDE_CMD=(
 
 # Dry run: the gate has passed; show what would start, then stop.
 if [ -n "$DRY_RUN" ]; then
-  printf '%s' "$SYSTEM_PROMPT" > "${WORK_DIR}/dry-run.system-prompt"
+  printf '%s' "$SYSTEM_PROMPT" > "${WORK_DIR}/${CHILD_ID}.dry-run.system-prompt"
   echo "gate: ok"
   printf 'argv: %q\n' "${CLAUDE_CMD[@]}"
   exit 0
@@ -487,7 +588,8 @@ WATCHDOG_PID=$!
 SENDER_PID=$!
 
 # Launch Claude interactively (blocks until Claude exits)
-"${CLAUDE_CMD[@]}" || true
+CLAUDE_RC=0
+"${CLAUDE_CMD[@]}" || CLAUDE_RC=$?
 
 # --- Post-execution ---
 # Claude has exited (user typed /exit, pane was killed, or watchdog fired).
@@ -502,19 +604,31 @@ unset WATCHDOG_PID
 # Clean up task file
 rm -f "$TASK_FILE"
 
-# Write success result if Claude didn't write one
+# Claude exited without writing a result file. Exiting is not the same as succeeding:
+# a non-zero exit is an error, and a clean exit is only "incomplete" because nothing
+# says the task was done.
 if [ ! -f "$RESULT_FILE" ]; then
+  if [ "$CLAUDE_RC" -ne 0 ]; then
+    FALLBACK_STATUS="error"
+    FALLBACK_TITLE="Error"
+    FALLBACK_BODY="claude exited with status ${CLAUDE_RC} and wrote no result file."
+  else
+    FALLBACK_STATUS="incomplete"
+    FALLBACK_TITLE="Incomplete"
+    FALLBACK_BODY="claude exited normally but wrote no result file; the task may not be done. Check the pane output."
+  fi
   cat > "${RESULT_FILE}.tmp" <<EOF
 ---
-status: success
+status: ${FALLBACK_STATUS}
 depth: ${DEPTH}
+exit_code: ${CLAUDE_RC}
 task: "$(echo "$TASK" | head -c 100)"
 completed: $(date -Iseconds)
 ---
 
-# Results
+# ${FALLBACK_TITLE}
 
-Task completed successfully. Check Claude Code output for details.
+${FALLBACK_BODY}
 EOF
   mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
 fi

@@ -117,8 +117,9 @@ A pane over a limit does not run; it returns `status: refused` with the reason.
 Panes run in auto mode (`--permission-mode auto`), not with a permission
 bypass. If the auto-mode classifier blocks an action, that pane may wait for
 you: look at the pane, then approve or redirect it. Destructive commands are
-denied by rule, and `git push` only works in the Main Brain pane; these Bash
-rules cover the usual command form and are not a security boundary.
+denied by rule in their usual forms, and `git push` is denied in the Child and
+Grandchild panes; these Bash rules cover the usual command form only and are not
+a security boundary.
 
 ## Close the loop with ccmemo
 

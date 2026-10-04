@@ -32,27 +32,29 @@ ccorch-wrapper.sh <task_description>
 
 ## Script Flow
 
-1. Validate inputs; `cd` to the project directory.
-2. Generate `CHILD_ID` (`depth<N>-<6 digits>`), `RESULT_FILE`, and install `trap cleanup EXIT`. The trap must exist before the gate so a refusal reaches the parent.
+1. Validate inputs; create `$WORK_DIR`; `cd` to the project directory.
+2. Generate `CHILD_ID` (`depth<N>-<PID>-<RANDOM>`), `RESULT_FILE`, and install `trap cleanup EXIT`. The trap must exist before the gate so a refusal reaches the parent. It is the only EXIT trap: it also releases the lock.
 3. **Start gate** (see [DEC-006](../decisions/DEC-006.md)):
-   - take `flock` on `$WORK_DIR/.lock` (warn and continue without it where `flock` is missing)
-   - refuse if the depth is not 1, 2 or 3
-   - count live recorded panes (`*.pane` compared with `tmux list-panes -a`, current pane excluded); refuse if the count plus this pane exceeds `CCORCH_MAX_PANES`
+   - refuse if `CCORCH_MAX_PANES`, `CCORCH_MAX_CHILDREN_D1` or `CCORCH_MAX_CHILDREN_D2` is not a positive integer, or the claimed depth is not 1, 2 or 3
+   - take the `mkdir` lock `$WORK_DIR/.lock.d` (retry every 0.1 s, 10 s at most, then refuse with "lock timeout"; a lock older than a minute is removed once as stale). It is released by `cleanup()` or earlier by the gate itself, never by a second trap
+   - refuse if `tmux list-panes -a` fails
+   - **derive the depth**: with no `CCORCH_PARENT_ID` the claimed depth must be 1 and no other live depth-1 record may exist in `$WORK_DIR`; with a parent, require its `<id>.pane` and `<id>.depth` records (depth 1 or 2) and a live parent pane, and refuse if `CCORCH_DEPTH` is not the parent's depth plus 1 (the reason names both). The effective depth drives the deny list, the children limit and the prompt
+   - count live recorded panes (`*.pane` compared with the `list-panes` output, current pane excluded); refuse if the count plus this pane exceeds `CCORCH_MAX_PANES`
    - at depth 2 and 3, count live siblings with the same `CCORCH_PARENT_ID` (paired through `<id>.parent`); refuse if the count plus this pane exceeds `CCORCH_MAX_CHILDREN_D1` (depth 2) or `_D2` (depth 3)
-   - write `<id>.pane` and `<id>.parent`, release the lock
+   - write `<id>.pane`, `<id>.depth` and `<id>.parent` (not in a dry run), release the lock
    - a refusal writes `status: refused` with a `reason:` line to the result file and exits 1; the trap signals the parent
-4. Set the pane title; write the status dashboard (depth 1); build the system prompt.
+4. Set the pane title; write the status dashboard (depth 1, not in a dry run); build the system prompt.
 5. Build the `claude` argv: `--permission-mode auto`, `--disallowedTools` with one rule per element, `--append-system-prompt`.
-6. Dry run: write the prompt to `$WORK_DIR/dry-run.system-prompt`, print `gate: ok` and the argv, exit 0. The trap writes `status: dry-run` and does not signal.
-7. Write the task file, start the watchdog and the task delivery subshell, run `claude` interactively.
-8. After `claude` exits: stop the watchdog, write a success result if none exists. The trap signals the parent.
+6. Dry run: write the prompt to `$WORK_DIR/<id>.dry-run.system-prompt`, print `gate: ok` and the argv, exit 0. The trap writes `status: dry-run` and does not signal. The gate ran as usual, including the lock, but wrote no records.
+7. Write the task file, start the watchdog and the task delivery subshell, run `claude` interactively and keep its exit status.
+8. After `claude` exits: stop the watchdog. If no result file exists, write `status: error` with the exit code when it was non-zero, and `status: incomplete` when it was 0 (never `success`). The trap signals the parent.
 
 ## Tool Flags
 
 | Flag | Value |
 |------|-------|
 | `--permission-mode` | `auto` at every depth |
-| `--disallowedTools`, every depth | `Bash(rm -rf *)` `Bash(git push --force *)` `Bash(git push -f *)` `Bash(git reset --hard *)` `Bash(git clean *)` `Bash(sudo *)` |
+| `--disallowedTools`, every depth | `Bash(rm -rf *)` `Bash(rm -fr *)` `Bash(rm -r -f *)` `Bash(rm -f -r *)` `Bash(git push --force *)` `Bash(git push *--force*)` `Bash(git push -f *)` `Bash(git push * +*)` `Bash(git reset --hard *)` `Bash(git clean *)` `Bash(sudo *)` |
 | `--disallowedTools`, depth 2 and 3 | adds `Bash(git push *)` |
 | `--disallowedTools`, depth 3 | adds `Agent` and `Bash(tmux *)` |
 | `--append-system-prompt` | the generated prompt |
@@ -65,7 +67,7 @@ ccorch-wrapper.sh <task_description>
 
 The `trap cleanup EXIT` pattern ensures:
 - Normal exit → signal sent
-- Refusal → `status: refused` result written, signal sent
+- Refusal → `status: refused` result written, lock released, signal sent
 - Error exit → error result written + signal sent
 - Kill signal → signal sent (EXIT trap fires on SIGTERM)
 - Timeout kill → timeout result already written by watchdog + signal sent
@@ -88,7 +90,7 @@ Runs as a background subshell, started after the gate and the dry-run exit:
 
 `depth${DEPTH}-$$-${RANDOM}` produces IDs like `depth2-48392-17011`:
 - Includes depth for debugging
-- PID and `$RANDOM` work on macOS, where BSD `date` has no `%N`. IDs must be unique: the gate pairs `<id>.pane` with `<id>.parent`, and a shared ID would let panes overwrite each other's files
+- PID and `$RANDOM` work on macOS, where BSD `date` has no `%N`. IDs must be unique: the gate pairs `<id>.pane` with `<id>.parent` and `<id>.depth`, and a shared ID would let panes overwrite each other's files
 
 ## Tests
 

@@ -160,13 +160,16 @@ This decision is delegated to the Main Brain based on task analysis.
 
 The wrapper enforces the three limits before `claude` starts. A pane started over a limit
 does not run: its result file has `status: refused` and a one-line reason, and the parent is
-signalled as usual. Treat that as the child's result.
+signalled as usual. Treat that as the child's result. The depth is not taken on trust: a
+pane's depth must equal its recorded parent's depth plus 1, and a session has one Main Brain.
+If a pane ends without a result file, the wrapper records `status: error` (with the exit
+code) or `status: incomplete`, never `success`.
 
 ## Permissions
 
 Panes start with `--permission-mode auto`, not with a permission bypass. Deny rules apply
-at every depth (`rm -rf`, force push, hard reset, `git clean`, `sudo`); depth 2 and 3 also
-deny `git push`, and depth 3 denies the Agent tool and `tmux`. The Bash deny rules catch
+at every depth (the usual forms of `rm -rf`, force push, hard reset, `git clean` and
+`sudo`); depth 2 and 3 also deny `git push`, and depth 3 denies the Agent tool and `tmux`. The Bash deny rules catch
 the usual command form only and are not a security boundary; the boundaries are the
 auto-mode classifier and the start gate.
 
