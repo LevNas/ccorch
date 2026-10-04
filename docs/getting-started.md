@@ -2,38 +2,36 @@
 
 > 日本語版: [getting-started.ja.md](getting-started.ja.md)
 
-Zero to first orchestration: lay out your repositories, install ccorch once at
-user scope, delegate a first task to a catalog agent, and (optionally) fan out
-parallel workers. The reference material — full catalog table, hook details,
-configuration — stays in the [README](../README.md).
+Zero to first pane run: lay out your repositories, install ccorch once at
+user scope, and launch your first `/ccor` task. The reference material —
+configuration, safety — stays in the [README](../README.md).
 
-> **Status: Experimental.** Orchestration spawns multiple Claude Code agents
+> **Status: Experimental.** Orchestration spawns multiple Claude Code sessions
 > and can consume significant tokens. Start small and watch your usage.
+
+ccorch does one thing: it splits work into **separate tmux panes**. Work
+distributed inside a single session (leaf agents, parallel worktree fan-out,
+agent records) is not part of ccorch since 0.5.0; see
+[Moved to ccharness](../README.md#moved-to-ccharness-090).
 
 ## What you end up with
 
-- ccorch installed **once**, active in every repository you open: nine
-  model-routed agent types, the enforcement hooks, and the `/ccor` /
-  `/ccor-parallel` skills
-- a first delegated task, with its launch recorded in the ledger
-- a working sense of when to use subagents (the default) and when tmux panes
-  are still the right tool (exactly three cases)
+- ccorch installed **once**, with the `/ccor` skill available in every
+  repository you open
+- a first `/ccor` run in a tmux pane
+- a working sense of the three cases where panes are the right tool
 
 ## Prerequisites
 
 - [Claude Code](https://code.claude.com/docs/en/overview) CLI
-- `jq` — recommended; the v2 hooks no-op without it
-- `git` — worktree isolation (`/ccor-parallel`) requires a git repository
-- `tmux` 1.8+ — pane mode (`/ccor`) only
+- `tmux` 1.8+ — required; `/ccor` must run inside a tmux session
 - Optional: [ghq](https://github.com/x-motemen/ghq) for the clone layout below
 
 ## Step 1 — Lay out your repositories
 
-Orchestration touches more of your filesystem than a plain session: pane mode
-launches sessions whose working directory is pinned to a target repository,
-and parallel workers operate in worktrees of the current one. A predictable
-clone layout keeps every target path guessable — for you and for the
-orchestrator.
+Pane mode launches sessions whose working directory is pinned to a target
+repository. A predictable clone layout keeps every target path guessable —
+for you and for the Main Brain.
 
 We recommend the `~/src/<host>/<owner>/<repo>` layout. Plain `git clone`
 works:
@@ -50,9 +48,7 @@ ghq get github.com/you/app        # clones to ~/src/github.com/you/app
 ghq list                          # every repository, one line each
 ```
 
-ghq is optional — nothing in ccorch depends on it. It simply makes "which
-repository does this pane/worker operate on" a path you can predict instead
-of one you have to look up.
+ghq is optional — nothing in ccorch depends on it.
 
 ## Step 2 — Install at user scope
 
@@ -64,20 +60,16 @@ In any Claude Code session:
 ```
 
 When Claude Code asks for a scope, choose **User** — the plugin installs once
-under `~/.claude/` and its agents, hooks, and skills are available in *every*
-repository you open, which is what this guide assumes. The same install from
-a shell, non-interactively:
+under `~/.claude/` and its skill is available in *every* repository you open.
+The same install from a shell, non-interactively:
 
 ```bash
 claude plugin install ccorch@levnas-plugins --scope user
 ```
 
 If the install summary says `Run /reload-plugins to activate`, do that (or
-start a new session). Then verify:
-
-- `/plugin list` shows ccorch as installed
-- ask Claude "what ccorch agent types are available?" — it should list the
-  nine `ccorch:*` catalog types from the [README](../README.md#agent-catalog)
+start a new session). Then verify that `/plugin list` shows ccorch as
+installed.
 
 **Team note** — to auto-enable ccorch for everyone who opens a shared project,
 commit this to the project's `.claude/settings.json` (teammates still run the
@@ -91,92 +83,47 @@ commit this to the project's `.claude/settings.json` (teammates still run the
 }
 ```
 
-## Step 3 — Delegate a first task
+## Step 3 — Run your first pane task
 
-The v2 default needs no special command — with the plugin installed, Claude
-Code sees the catalog types and you ask for delegation in plain words:
-
-> Use ccorch:web-research to survey current approaches to X, with sources.
-
-What just happened, and why it matters:
-
-- the leaf ran on its **pinned model and effort** (sonnet, low effort) instead
-  of silently inheriting your expensive main-session model;
-- `agent_gate.sh` enforced the **catalog tier guard** (the parallel cap and
-  the default subagent model come from the official `env` settings, see
-  Tuning);
-- the launch was appended to the **ledger** at `.claude/ccorch/ledger.jsonl`.
-
-Verify the ledger after the first run:
-
-```bash
-tail -1 .claude/ccorch/ledger.jsonl | jq .
-```
-
-Format details: [ledger.md](ledger.md). If the file is missing, check that
-`jq` is installed — the hooks are fail-open and no-op without it.
-
-Pick leaves by cost: extraction and log-distilling run on haiku, research and
-implementation on sonnet, adversarial refutation on sonnet at high effort —
-see the [catalog table](../README.md#agent-catalog). If a leaf's output is not
-good enough, re-run the same prompt one model tier up (at most once) — leaves
-never judge their own quality.
-
-## Step 4 — Fan out parallel workers (optional)
-
-When you have several implementation tasks with **disjoint file ownership**,
-`/ccor-parallel` fans them out to isolated worktree workers, then merges the
-results in a dedicated integration worktree (never on main) and cleans up:
-
-```
-/ccor-parallel <task list with explicit file ownership per task>
-```
-
-Full procedure and the four orchestrator responsibilities:
-[skills/ccor-parallel/SKILL.md](../skills/ccor-parallel/SKILL.md).
-
-## When panes are still the right tool
-
-Use `/ccor` (tmux pane mode) only for the three cases subagents cannot cover:
-
-1. work that **writes to another repository**
-2. work needing the target repo's **permission/hook enforcement layer**
-3. work needing **real-time visual supervision**
+Start (or attach to) a tmux session, start Claude Code inside it, and run:
 
 ```
 /ccor <task description>
 ```
 
-## Tuning
+A Main Brain pane opens beside your session, decomposes the task and delegates
+to Child panes. Your own session stays free; you are notified when the Main
+Brain signals completion, and the results are read from
+`/tmp/ccorch/<session_id>/`.
 
-Defaults are conservative. The one knob most worth knowing on day one is the
-official `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (set it to `3`, or `2` on a
-modest host, in the `env` block of `~/.claude/settings.json`), since every
-concurrent agent is a running Claude Code instance. Pair it with
-`CLAUDE_CODE_SUBAGENT_MODEL` so non-catalog spawns default to a cheaper tier.
-The full table is in the [README](../README.md#enforcement-hooks).
+Use panes only for these three cases:
+
+1. work that **writes to another repository**
+2. work that must run under the target repository's **permission/hook layer**
+3. work that needs **real-time visual supervision**
+
+Anything else is cheaper in one session.
+
+## Configuration
+
+The knobs are the `CCORCH_*` environment variables in the
+[README](../README.md#configuration). The one most worth knowing on day one is
+`CCORCH_MAX_CHILDREN_D1` (default `3`): every pane is a running Claude Code
+instance, so lower it on a modest host.
 
 ## Close the loop with ccmemo
 
-An orchestrated session discovers more than one context window can retain —
-and without persistence, the next session starts from zero. ccorch's sibling
-plugin [ccmemo](https://github.com/LevNas/ccmemo) — same marketplace — is the
-missing half, and two catalog types are built to plug directly into it:
+A pane run discovers more than one context window can retain — and without
+persistence, the next session starts from zero. ccorch's sibling plugin
+[ccmemo](https://github.com/LevNas/ccmemo) — same marketplace — is the
+missing half:
 
-- **`ccorch:knowledge-recorder`** drafts knowledge entries following ccmemo's
-  `/record-knowledge` conventions. With ccmemo's scaffolding in place
-  (`.claude/knowledge/`), a wave of orchestrated work can end with its
-  discoveries drafted as ready-to-commit entries — you keep the decision of
-  *what* gets recorded.
-- **`ccorch:kb-integrator`** reads ten or more ccmemo entries and returns a
-  cited synthesis — the "what do we already know about X" sweep that makes a
-  grown knowledge base a pre-design asset instead of a pile.
-
-And ccmemo gives the orchestrator memory in the other direction:
-`/plan-task` persists a multi-wave plan across sessions, so a large
-orchestration can run as resumable waves over days instead of one marathon;
-`/recall-knowledge` lets any new session recover what earlier waves learned
-before it spends tokens rediscovering it.
+- `/record-knowledge` persists what the run discovered, so you keep the
+  decision of *what* gets recorded.
+- `/plan-task` persists a multi-step plan across sessions, so a large task can
+  run as resumable steps over days instead of one marathon.
+- `/recall-knowledge` lets any new session recover what earlier runs learned
+  before it spends tokens rediscovering it.
 
 ```
 /plugin install ccmemo@levnas-plugins

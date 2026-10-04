@@ -69,6 +69,8 @@ Grandchild (DEPTH=3)
 | DEC-001 | tmux wait-for for signaling (not polling) | Approved | [Details](decisions/DEC-001.md) @decisions/DEC-001.md |
 | DEC-002 | Environment variables for depth propagation | Approved | [Details](decisions/DEC-002.md) @decisions/DEC-002.md |
 | DEC-003 | /tmp/ for result storage (not .claude/) | Approved | [Details](decisions/DEC-003.md) @decisions/DEC-003.md |
+| DEC-004 | v2 subagent-default hybrid; three conditions for panes | Partially superseded by DEC-005 (pane conditions stand) | [Details](decisions/DEC-004.md) @decisions/DEC-004.md |
+| DEC-005 | ccorch is pane orchestration only; in-session distribution moved to ccharness | Accepted | [Details](decisions/DEC-005.md) @decisions/DEC-005.md |
 
 ## Security Considerations
 
@@ -178,5 +180,7 @@ docs/sdd/design/
 └── decisions/
     ├── DEC-001.md              # tmux wait-for signaling
     ├── DEC-002.md              # Environment variable depth propagation
-    └── DEC-003.md              # /tmp/ result storage
+    ├── DEC-003.md              # /tmp/ result storage
+    ├── DEC-004.md              # v2 hybrid; three pane conditions
+    └── DEC-005.md              # pane orchestration only
 ```
