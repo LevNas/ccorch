@@ -98,6 +98,8 @@ mode ([DEC-006](docs/sdd/design/decisions/DEC-006.md), fixes #9).
 - `tests/test_wrapper.sh`, run in CI.
 - NFR-SEC-001 to 003 are "Implemented and unit-tested; live check pending" until the
   maintainer has run a live `/ccor`; Bash deny rules are still documented as not a boundary.
+  (Since verified by the 2026-10-04 live check, with stated gaps; see
+  [DEC-006](docs/sdd/design/decisions/DEC-006.md).)
 
 ### Fixed
 

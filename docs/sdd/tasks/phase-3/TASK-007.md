@@ -1,7 +1,10 @@
 # TASK-007: Integration Smoke Test
 
 ## Status
-TODO
+IN PROGRESS. The 0.6.0 live check on 2026-10-04 (issue #11) covered part of step 3 and the limit
+refusals of DEC-006. The plugin was updated from 0.5.0 to 0.6.0 from the marketplace with
+`claude plugin update ccorch@levnas-plugins`; a fresh `/plugin install` (step 1) was not run.
+Steps 2, 4, 5 and 6 have not been run live, and 0.6.1 has not had a live check.
 
 ## Description
 Verify that the complete flow works end-to-end: plugin installation, skill invocation, pane creation, task execution, and result retrieval.
@@ -40,9 +43,9 @@ Verify that the complete flow works end-to-end: plugin installation, skill invoc
    - Verify no files leaked into the repository
 
 ## Acceptance Criteria
-- [ ] Plugin installs successfully from marketplace
+- [ ] Plugin installs successfully from marketplace (only an update from the marketplace was run, 2026-10-04)
 - [ ] Precondition checks work correctly
-- [ ] Basic orchestration completes with result.md
+- [ ] Basic orchestration completes with result.md (partly, 0.6.0, 2026-10-04: the Main Brain pane ran and `result.md` matched its result, but only after a human sent `/exit`, and both runs stopped once at a user's ask rule on `mv` until a human answered; the return to interactive mode and the completion notification were not checked)
 - [ ] Depth limit is enforced
 - [ ] Timeout mechanism works
 
