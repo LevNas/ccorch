@@ -10,7 +10,7 @@ mode ([DEC-006](docs/sdd/design/decisions/DEC-006.md), fixes #9).
 ### Upgrading from 0.5.x
 
 - **Panes may now stop and ask you.** Up to 0.5.x, panes ran with the permission
-  bypass and never prompted. From 0.6.0 they run in auto mode, and a pane waits
+  bypass and did not prompt for ordinary actions. From 0.6.0 they run in auto mode, and a pane waits
   for a human when the classifier blocks an action. Watch the panes of a long
   run instead of leaving it unattended.
 - **Without auto mode, every pane prompts.** When auto mode is not available to
