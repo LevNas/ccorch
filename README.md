@@ -7,7 +7,8 @@ sessions** — a Main Brain pane that delegates to Child and Grandchild panes �
 and collects their results through files and `tmux wait-for` signals.
 
 Since 0.5.0 ccorch does only this. Distribution of work *inside* one session
-(leaf agents, parallel worktree fan-out) moved to ccharness, see
+(leaf agents, parallel worktree fan-out) moved out of ccorch; if installed,
+ccharness provides it — see
 [Moved to ccharness (0.9.0)](#moved-to-ccharness-090).
 
 ## Prerequisites
