@@ -5,10 +5,10 @@
 
 ## Explicitly Specified Information
 
-- [x] Technology: tmux (wait-for signaling), Claude Code CLI (`-p`, `--allowedTools`, `--append-system-prompt`)
+- [x] Technology: tmux (wait-for signaling), Claude Code CLI (interactive, `--allowedTools`, `--append-system-prompt`)
 - [x] Architecture: 3-level tmux pane hierarchy with environment variable depth propagation
 - [x] Communication: `tmux wait-for` signals + file-based data exchange (`/tmp/ccorch/`)
-- [x] Safety: Multi-layer defense (tool restrictions, system prompt guards, Bash patterns)
+- [x] Safety: system prompt guard rails per depth, plus `--allowedTools` / `--disallowedTools` flags. The wrapper also passes `--dangerously-skip-permissions` (see Security Considerations)
 - [x] Plugin format: Claude Code plugin (`.claude-plugin/plugin.json`, skills, hooks)
 - [x] Distribution: claudecode-plugins marketplace
 
@@ -48,7 +48,7 @@ Child (DEPTH=2)
            │
 Grandchild (DEPTH=3)
   │
-  ├── Cannot create new panes (Agent tool disabled)
+  ├── Cannot create new panes (by system prompt; see the flag table in Security Considerations)
   ├── Execute assigned task only
   ├── Write results → /tmp/ccorch/<id>/grandchild-<n>.md
   └── tmux wait-for -S <parent_channel>
@@ -69,32 +69,38 @@ Grandchild (DEPTH=3)
 | DEC-001 | tmux wait-for for signaling (not polling) | Approved | [Details](decisions/DEC-001.md) @decisions/DEC-001.md |
 | DEC-002 | Environment variables for depth propagation | Approved | [Details](decisions/DEC-002.md) @decisions/DEC-002.md |
 | DEC-003 | /tmp/ for result storage (not .claude/) | Approved | [Details](decisions/DEC-003.md) @decisions/DEC-003.md |
+| DEC-004 | v2 subagent-default hybrid; three conditions for panes | Partially superseded by DEC-005 (pane conditions stand) | [Details](decisions/DEC-004.md) @decisions/DEC-004.md |
+| DEC-005 | ccorch is pane orchestration only; in-session distribution moved to ccharness | Accepted | [Details](decisions/DEC-005.md) @decisions/DEC-005.md |
 
 ## Security Considerations
 
-### Depth-Based Tool Restrictions
+### Depth-Based Tool Flags
 
-Each depth level has progressively stricter tool permissions:
+What the wrapper passes (`scripts/ccorch-wrapper.sh`), and what `claude --help` says about each flag:
+
+| Flag | DEPTH 1, 2 | DEPTH 3 | `claude --help` |
+|------|-----------|---------|-----------------|
+| `--dangerously-skip-permissions` | yes | yes | "Bypass all permission checks" |
+| `--allowedTools` | `Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent` | same without `tmux:*` and `Agent` | list of tool names "to allow" |
+| `--disallowedTools` | not passed | `"Agent"` | list of tool names "to deny" |
+| `--append-system-prompt` | yes | yes | appends a system prompt |
+
+What these flags restrict under the permission bypass is unverified; see [NFR-SEC-003](../requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention).
+
+What the wrapper runs (interactive Claude Code; the task is not passed with `-p`):
 
 ```bash
-# DEPTH=1 (Main Brain)
+# DEPTH 1 and 2
 claude --dangerously-skip-permissions \
   --allowedTools "Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent" \
-  --append-system-prompt "You are CCORCH Main Brain (DEPTH=1)..." \
-  -p "$TASK"
+  --append-system-prompt "$SYSTEM_PROMPT"
 
-# DEPTH=2 (Child)
-claude --dangerously-skip-permissions \
-  --allowedTools "Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent" \
-  --append-system-prompt "You are CCORCH Child (DEPTH=2)..." \
-  -p "$TASK"
+# DEPTH 3: same, with the allowlist "Read Edit Write Bash(git:status,git:diff,git:add,git:commit) Grep Glob"
+# and one more flag
+  --disallowedTools "Agent"
 
-# DEPTH=3 (Grandchild)
-claude --dangerously-skip-permissions \
-  --allowedTools "Read Edit Write Bash(git:status,git:diff,git:add,git:commit) Grep Glob" \
-  --disallowedTools "Agent" \
-  --append-system-prompt "You are CCORCH Grandchild (DEPTH=3). Do NOT create new panes..." \
-  -p "$TASK"
+# Task delivery, started in the background before claude launches:
+sleep 3; tmux load-buffer "$TASK_FILE"; tmux paste-buffer -t "$CURRENT_PANE"; sleep 0.5; tmux send-keys -t "$CURRENT_PANE" Enter
 ```
 
 ### Guard Rail System Prompts
@@ -154,12 +160,17 @@ mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
 ```
 ccorch/
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin metadata (v0.1.0)
+│   └── plugin.json              # Plugin metadata (v0.5.0)
+├── hooks/
+│   ├── hooks.json               # Stop hook registration
+│   └── stop_signal.sh           # Signals the parent pane on Stop
 ├── skills/
 │   └── ccor/
 │       └── SKILL.md             # Skill definition
 ├── scripts/
 │   └── ccorch-wrapper.sh        # Child pane wrapper script
+├── docs/                        # Getting-started guides, sdd/
+├── CHANGELOG.md                 # Release notes
 ├── LICENSE                      # MIT
 └── README.md                    # Installation & usage
 ```
@@ -178,5 +189,7 @@ docs/sdd/design/
 └── decisions/
     ├── DEC-001.md              # tmux wait-for signaling
     ├── DEC-002.md              # Environment variable depth propagation
-    └── DEC-003.md              # /tmp/ result storage
+    ├── DEC-003.md              # /tmp/ result storage
+    ├── DEC-004.md              # v2 hybrid; three pane conditions
+    └── DEC-005.md              # pane orchestration only
 ```

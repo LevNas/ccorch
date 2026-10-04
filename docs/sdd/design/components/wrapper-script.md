@@ -118,15 +118,24 @@ else
 fi
 
 # --- Launch Claude Code ---
-CMD="claude --dangerously-skip-permissions"
-CMD="$CMD --allowedTools \"$ALLOWED_TOOLS\""
+# Interactive launch (no -p); the task is pasted in after the TUI starts
+CLAUDE_CMD=(claude --dangerously-skip-permissions
+  --allowedTools "$ALLOWED_TOOLS"
+  --append-system-prompt "$SYSTEM_PROMPT")
 if [ -n "$DISALLOWED_TOOLS" ]; then
-  CMD="$CMD --disallowedTools \"$DISALLOWED_TOOLS\""
+  CLAUDE_CMD+=(--disallowedTools "Agent")
 fi
-CMD="$CMD --append-system-prompt \"$SYSTEM_PROMPT\""
-CMD="$CMD -p \"$TASK\""
 
-eval "$CMD"
+printf '%s' "$TASK" > "$TASK_FILE"
+(
+  sleep 3
+  tmux load-buffer "$TASK_FILE"
+  tmux paste-buffer -t "$CURRENT_PANE"
+  sleep 0.5
+  tmux send-keys -t "$CURRENT_PANE" Enter
+) &
+
+"${CLAUDE_CMD[@]}" || true
 
 # --- Kill watchdog ---
 kill $WATCHDOG_PID 2>/dev/null || true

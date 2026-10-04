@@ -22,11 +22,11 @@ ccorch is a tmux-based orchestration plugin for Claude Code. Running the `/ccor`
 | REQ-001 | `/ccor` skill creates Main Brain pane automatically | US-001 | Defined |
 | REQ-002 | User session continues parallel work after launch | US-001 | Defined |
 | REQ-003 | Depth propagation via CCORCH_DEPTH env var | US-002 | Defined |
-| REQ-004 | Structurally prohibit pane creation at DEPTH=3 | US-002 | Defined |
+| REQ-004 | Prohibit pane creation at DEPTH=3 (see [NFR-SEC-003](nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention)) | US-002 | Unverified |
 | REQ-005 | tmux wait-for based signaling | US-003 | Defined |
 | REQ-006 | File-based data exchange via /tmp/ccorch/<session_id>/ | US-003 | Defined |
 | REQ-007 | Timeout to prevent infinite blocking | US-003 | Defined |
-| REQ-008 | Depth-based tool restrictions via --allowedTools | US-004 | Defined |
+| REQ-008 | Depth-based tool flags via --allowedTools (see [NFR-SEC-003](nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention)) | US-004 | Unverified |
 | REQ-009 | Guard rails via --append-system-prompt | US-004 | Defined |
 | REQ-010 | ccmemo record-knowledge / plan-task integration | US-005 | Defined |
 | REQ-011 | Standalone operation without ccmemo | US-005 | Defined |
@@ -43,7 +43,7 @@ ccorch is a tmux-based orchestration plugin for Claude Code. Running the `/ccor`
 ## Dependencies
 
 - **tmux** 1.8+: Required for `wait-for` command support
-- **Claude Code CLI**: Requires `--dangerously-skip-permissions`, `--allowedTools`, `--append-system-prompt`, `-p` flags
+- **Claude Code CLI**: Requires `--dangerously-skip-permissions`, `--allowedTools`, `--append-system-prompt` flags (interactive launch; the task is delivered with tmux `paste-buffer`)
 - **ccmemo** (optional): Integration features activate only when installed
 
 ## Out of Scope
@@ -52,7 +52,7 @@ ccorch is a tmux-based orchestration plugin for Claude Code. Running the `/ccor`
 - Non-tmux terminal multiplexer support (zellij, screen, etc.)
 - Depth beyond 3 levels
 - Cross-machine remote orchestration
-- Interactive mode for child panes (`-p` one-shot only)
+- Headless one-shot workers for child panes (panes run interactively; see the billing constraint in DEC-004)
 
 ---
 

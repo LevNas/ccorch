@@ -2,16 +2,19 @@
 
 > **Status: Experimental** — This plugin is in early development. Each orchestration session spawns multiple Claude Code instances, which can consume significant tokens. Use with caution and monitor your usage.
 
-Orchestration plugin for Claude Code. Since v2 (0.3.0) the default substrate
-is Claude Code's native subagents — background agents, SendMessage resume,
-and worktree isolation — with a bundled, model-routed agent catalog and
-enforcement hooks. tmux panes remain for exactly three cases (see below).
+tmux pane orchestration for Claude Code. `/ccor` splits work into **separate
+sessions** — a Main Brain pane that delegates to Child and Grandchild panes —
+and collects their results through files and `tmux wait-for` signals.
+
+Since 0.5.0 ccorch does only this. Distribution of work *inside* one session
+(leaf agents, parallel worktree fan-out) moved out of ccorch; if installed,
+ccharness provides it — see
+[Moved to ccharness (0.9.0)](#moved-to-ccharness-090).
 
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI
-- `jq` (recommended — the v2 hooks no-op without it)
-- [tmux](https://github.com/tmux/tmux) 1.8+ (pane mode `/ccor` only)
+- [tmux](https://github.com/tmux/tmux) 1.8+ (required; `/ccor` must run inside a tmux session)
 
 ## Installation
 
@@ -23,95 +26,23 @@ enforcement hooks. tmux panes remain for exactly three cases (see below).
 /plugin install ccorch@levnas-plugins
 ```
 
-Step-by-step walkthrough — repository layout, user scope, first delegation,
+Step-by-step walkthrough — repository layout, user scope, first run,
 ccmemo integration: [docs/getting-started.md](docs/getting-started.md)
 ([日本語](docs/getting-started.ja.md)).
 
-## v2: Subagent Orchestration (default)
+## When to use panes
 
-### Agent catalog
+Use `/ccor` only for:
 
-Nine leaf agent types ship with `model` and `effort` pinned in frontmatter,
-so "forgot to specify a model" (which silently inherits your expensive
-main-session model) becomes "picked a type with the right cost". None of
-them has the Agent tool — leaves cannot spawn sub-leaves (depth control).
+1. Work that **writes to another repository**
+2. Work that must run under the **target repository's permission/hook layer**
+3. Work that needs **real-time visual supervision**
 
-| Type | Job | Model | Effort |
-|------|-----|-------|--------|
-| `ccorch:web-research` | Web research over 3+ sources, cited + freshness-dated | sonnet | low |
-| `ccorch:url-extract` | Pure extraction from given URLs | haiku | low |
-| `ccorch:log-distiller` | Distill tests/builds/logs to the lines that matter | haiku | low |
-| `ccorch:worktree-worker` | Mechanical implementation + commit in an isolated worktree | sonnet | low |
-| `ccorch:impl-verifier` | Acceptance-criteria verification, evidence per criterion | sonnet | medium |
-| `ccorch:pbr-reviewer` | Perspective-parameterized review (`[LGTM]/[CONCERN]/[GAP]`) | sonnet | medium |
-| `ccorch:kb-integrator` | Integrate 10+ knowledge entries into a cited synthesis | sonnet | medium |
-| `ccorch:knowledge-recorder` | Draft KB entries per host conventions (ccmemo style) | sonnet | medium |
-| `ccorch:web-refuter` | Adversarial refutation of decision-grade claims | sonnet | high |
+For anything else, stay in one session. Design rationale:
+[DEC-004](docs/sdd/design/decisions/DEC-004.md) (the three conditions) and
+[DEC-005](docs/sdd/design/decisions/DEC-005.md) (the narrowing).
 
-Escalation is deterministic: on insufficient quality, the orchestrator
-re-runs the same prompt one model tier up (at most once) — leaves never
-judge their own quality.
-
-### Enforcement hooks
-
-| Hook | Event | What it does |
-|------|-------|--------------|
-| `agent_gate.sh` | PreToolUse (Agent) | Denies model overrides above a catalog type's tier (+1 allowed for escalation). The parallel cap and the default model are official settings now, see below |
-| `ledger_record.sh` | PostToolUse (Agent) | Appends launch records (thread → agentId) to `.claude/ccorch/ledger.jsonl` |
-| `ledger_stop.sh` | SubagentStop | Appends stop records (balances the running count) |
-
-All hooks are fail-open: missing `jq`, malformed input, or an unreadable
-ledger never blocks a session. Ledger format: [docs/ledger.md](docs/ledger.md).
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `CCORCH_GATE` | `on` | `off` disables the catalog tier guard |
-| `CCORCH_MODEL_GUARD` | `on` | Same as `CCORCH_GATE` (kept for compatibility) |
-
-### Official settings that replaced two guards (0.4.0)
-
-The parallel cap and the "no explicit model" deny used to be custom guards in `agent_gate.sh`. Claude Code provides both officially; put them in the `env` block of `~/.claude/settings.json` (or a project's `.claude/settings.json` to share them):
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
-    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "3",
-    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
-  }
-}
-```
-
-| Variable | Replaces | Notes |
-|---|---|---|
-| `CLAUDE_CODE_SUBAGENT_MODEL` | `CCORCH_MODEL_GUARD` deny for spawns without a model | Default model for every subagent not assigned one another way (per-invocation `model` and agent frontmatter still win). `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` forces it on all |
-| `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` | `CCORCH_MAX_PARALLEL` (ledger-derived cap) | The Agent tool refuses to spawn past it. Related: `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` |
-| `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` | (new) | `1` stops subagents from spawning their own, which is how the catalog leaves are designed |
-
-Reference: https://code.claude.com/docs/en/env-vars
-
-### `/ccor-parallel`
-
-Fans out file-ownership-disjoint tasks to parallel `worktree-worker` agents,
-then executes the four orchestrator responsibilities the harness does not
-cover: **origin pinning** (with `worktree.baseRef: head`, the orchestrator's
-HEAD decides every worker's base), **capture preservation** (session-capture
-files die with the worktree — move them out first), **integration merge**
-(dedicated worktree, `--no-ff`, never on main), and **cleanup** (`worktree
-remove --force` + branch deletion, only after a `merge-base --is-ancestor`
-check). See [skills/ccor-parallel/SKILL.md](skills/ccor-parallel/SKILL.md).
-
-### When panes are still the right tool
-
-Use `/ccor` (pane mode, below) only for:
-
-1. Work that **writes to another repository** (subagents cannot)
-2. Work needing the target repo's **permission/hook enforcement layer**
-3. Work needing **real-time visual supervision**
-
-Design rationale: [docs/sdd/design/decisions/DEC-004.md](docs/sdd/design/decisions/DEC-004.md).
-
-## Pane Mode: `/ccor`
+## `/ccor`
 
 ```
 /ccor <task description>
@@ -136,14 +67,13 @@ Your Session ──► Main Brain (DEPTH=1)
 1. `/ccor` creates a **Main Brain** pane that analyzes and decomposes your task
 2. Main Brain delegates subtasks to **Child** panes for parallel execution
 3. Children can further delegate to **Grandchild** panes (max depth)
-4. Results flow back up via `tmux wait-for` signals and file exchange
+4. Results flow back up via `tmux wait-for` signals and file exchange under `/tmp/ccorch/<session_id>/`
 5. Your session continues working in parallel — you're notified on completion
 
 ### Safety
 
-- **Tool restrictions**: Each depth level has progressively stricter `--allowedTools`
-- **Depth limit**: Grandchildren (DEPTH=3) cannot create new panes (`Agent` tool disabled)
-- **Bash restrictions**: Destructive commands (`git push --force`, `rm -rf`) are pattern-blocked
+- **Permissions are bypassed**: every pane starts with `--dangerously-skip-permissions`. Whether the `--allowedTools` / `--disallowedTools` flags restrict anything under it is unverified; [NFR-SEC-003](docs/sdd/requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention) has the details
+- **Guard rails**: destructive commands (`git push --force`, `git reset --hard`, `branch -D`, `rm -rf`) and pane creation at DEPTH 3 are forbidden in each pane's system prompt (`--append-system-prompt`); no verified flag blocks them
 - **Timeout**: Panes auto-terminate after configurable timeout (default: 600s)
 
 ## Configuration
@@ -154,6 +84,38 @@ Your Session ──► Main Brain (DEPTH=1)
 | `CCORCH_MAX_PANES` | `8` | Maximum total panes per session |
 | `CCORCH_MAX_CHILDREN_D1` | `3` | Max concurrent children for Main Brain |
 | `CCORCH_MAX_CHILDREN_D2` | `2` | Max concurrent grandchildren per Child |
+
+## Moved to ccharness (0.9.0)
+
+ccorch 0.4.0 also shipped an in-session agent catalog, hooks and a parallel
+fan-out skill. ccorch 0.5.0 no longer ships any of them. If ccharness 0.9.0 or
+later is installed, it provides the moved parts:
+
+| Was in ccorch 0.4.0 | If ccharness is installed |
+|---------------------|-----|
+| 8 leaf agent types `ccorch:<type>` (web-research, web-refuter, log-distiller, worktree-worker, impl-verifier, pbr-reviewer, kb-integrator, knowledge-recorder) | `ccharness:<type>` |
+| `/ccor-parallel` | `/ccharness:parallel-worktree` (cleanup only through worktree-sweep) |
+| Catalog tier guard (`agent_gate.sh`) | ccharness's catalog tier guard |
+| Agent ledger | `<main checkout>/.claude/ccharness/ledger.jsonl` |
+| `url-extract` | Retired, not moved; see [DEC-005](docs/sdd/design/decisions/DEC-005.md#what-was-retired) |
+
+**Migration**
+
+- Replace `ccorch:<type>` with `ccharness:<type>` in your own rules and prompts.
+- Replace `/ccor-parallel` with `/ccharness:parallel-worktree`.
+- Old ledger: delete `.claude/ccorch/ledger.jsonl` first, and only then drop its
+  `.gitignore` line. In the other order, repositories that commit `.claude/`
+  see the file appear as untracked.
+- If your repository commits `.claude/`, ignore `.claude/ccharness/` as well.
+- Environment variables `CCORCH_GATE`, `CCORCH_MODEL_GUARD` and
+  `CCORCH_MAX_PARALLEL` no longer exist. Replacements:
+  - `CCORCH_MAX_PARALLEL` (the parallel cap) → the official
+    `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, in the `env` block of your settings
+  - `CCORCH_MODEL_GUARD` (the deny for spawns without a model) → the official
+    `CLAUDE_CODE_SUBAGENT_MODEL`, in the `env` block of your settings
+  - `CCORCH_GATE` (the catalog tier check; `CCORCH_MODEL_GUARD=off` was an alias
+    of `CCORCH_GATE=off`) → ccharness's tier guard hook, if installed; its off
+    switch is `CCHARNESS_TIER_GUARD=off`
 
 ## Optional Integrations
 
@@ -170,15 +132,14 @@ ccorch follows the LevNas plugin conventions maintained in [claudecode-plugins/d
 |----------|---------|----------|
 | `README.md` | Plugin overview and usage | Users (humans) |
 | `skills/<name>/SKILL.md` | Skill definition with required frontmatter (`name`/`description`/`license`/`allowed-tools`) | Claude Code |
-| `agents/` | Bundled subagent definitions (model/effort pinned in frontmatter) | Claude Code |
 | `hooks/` | Hook implementations and `hooks.json` | Claude Code |
 | `scripts/` | Wrapper scripts (e.g. `ccorch-wrapper.sh`) | Runtime |
 | `docs/sdd/` | SDD-style design documents (requirements/design/tasks) | Contributors (humans) |
 
-Run the central linter from claudecode-plugins before sending a PR:
+Run the central linter from a claudecode-plugins checkout before sending a PR:
 
 ```bash
-bash ~/src/github.com/LevNas/claudecode-plugins/scripts/lint-skills.sh ~/src/github.com/LevNas/ccorch
+bash <path-to-claudecode-plugins>/scripts/lint-skills.sh .
 ```
 
 ## License
