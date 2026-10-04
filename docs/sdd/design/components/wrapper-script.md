@@ -77,9 +77,38 @@ The `trap cleanup EXIT` pattern ensures:
 
 ### Atomic Result File Write
 
-All writes use the `write-to-tmp → mv` pattern:
+The wrapper's own writes (refusal, error, incomplete, timeout results, the first `status.md`,
+the copy to `result.md`) use the `write-to-tmp → mv` pattern:
 - Prevents parent from reading a partially written file
 - `mv` is atomic on same filesystem (`/tmp/`)
+
+The panes do not. Their prompt tells them to write the result file and `status.md` with the
+Write tool (or Edit), never with `mv` or shell redirection: a user's ask rule on those commands
+(for example `Bash(mv *)`) overrides auto mode and stopped the pane in the 0.6.0 live check.
+
+### Completion signal: the Stop hook and `result.md`
+
+`hooks/stop_signal.sh` runs at the end of every turn of a pane (Claude Code's Stop event),
+not only when the pane is done. Since 0.6.1:
+- It signals the parent only once the pane's result file (`CCORCH_RESULT_FILE`) exists and
+  is non-empty. Turns that end before that send nothing. The prompt says so: the result file
+  is written once, at the end, and is the completion signal.
+- For the session's Main Brain (`CCORCH_COPY_RESULT=1`), it copies the result file to
+  `${WORK_DIR}/result.md` before the signal, and again on every later Stop, so the user's
+  session can read the result while the Main Brain's session is still open.
+- A pane started by an older wrapper has no `CCORCH_RESULT_FILE` and signals on every Stop.
+- The wrapper's `cleanup()` copies the result to `result.md` when the result file is newer
+  than `result.md` (or `result.md` is absent), so a result rewritten after the last Stop, or
+  a refusal, error or timeout result, still reaches it.
+
+Trade-off: a pane that is stuck (a permission prompt, a classifier block, a question to the
+user) and has written no result sends no signal; its parent hears from it when its
+`CCORCH_TIMEOUT` runs out. Before 0.6.1 the parent was woken at every turn but found no
+result to read.
+
+Dependency: a `tmux wait-for -S` on a channel nobody waits on is kept for the next
+`wait-for` on that channel (checked on tmux 3.7b), so a child that finishes before its parent
+starts waiting is not lost. The fake tmux in the tests cannot show this.
 
 ### Watchdog Process
 

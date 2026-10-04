@@ -168,7 +168,7 @@ ccorch/
 │   └── plugin.json              # Plugin metadata (v0.5.0)
 ├── hooks/
 │   ├── hooks.json               # Stop hook registration
-│   └── stop_signal.sh           # Signals the parent pane on Stop
+│   └── stop_signal.sh           # Signals the parent pane on Stop, once the result file exists
 ├── skills/
 │   └── ccor/
 │       └── SKILL.md             # Skill definition

@@ -193,9 +193,11 @@ EOF
   fi
 
   # The Main Brain's result reaches the user's session even when it ended without writing
-  # result.md (refused, error, incomplete, timeout). WORK_DIR is new for each session, so
-  # writing it when absent is enough.
-  if [ -n "$COPY_RESULT" ] && [ ! -e "${OUT_DIR}/result.md" ] && [ -f "$RESULT_FILE" ]; then
+  # result.md (refused, error, incomplete, timeout). The Stop hook also copies it on each
+  # Stop once it exists; copy here when the result file is newer than result.md, which
+  # includes "result.md is absent". cp gives result.md a fresh mtime, so right after a
+  # hook copy this is false, and it is true again only when the result was rewritten.
+  if [ -n "$COPY_RESULT" ] && [ -f "$RESULT_FILE" ] && [ "$RESULT_FILE" -nt "${OUT_DIR}/result.md" ]; then
     { cp "$RESULT_FILE" "${OUT_DIR}/result.md.tmp" && mv "${OUT_DIR}/result.md.tmp" "${OUT_DIR}/result.md"; } 2>/dev/null || true
   fi
 
@@ -482,13 +484,14 @@ SYSTEM_PROMPT="You are a CCORCH worker at DEPTH=${DEPTH}.
 - Timeout: ${TIMEOUT}s
 
 ## Rules
-- Write your results to ${RESULT_FILE} when done
+- Write your results to ${RESULT_FILE} when done, once, at the end. Writing that file is what tells your parent you are done: your parent is woken at the end of the first turn in which the file exists, so do not write a provisional or in-progress result there
+- Write ${RESULT_FILE} and the status dashboard with the Write tool (or Edit), not with \`mv\` or shell redirection. A user's ask rule on such commands overrides auto mode and stops this pane until a human answers
 - No destructive git operations (push --force, reset --hard, branch -D)
 - No destructive filesystem operations (rm -rf)
 - Do not modify files outside the current working directory unless explicitly required by the task
 
 ## Permissions
-- This pane runs in auto mode. An action the auto-mode classifier blocks may need a human to approve it in this pane; if you are blocked, say so in your result file instead of retrying another way round
+- This pane runs in auto mode. An action the auto-mode classifier blocks may need a human to approve it in this pane; if you are blocked, say so in your result file instead of retrying another way round. Until the result file exists your parent is not told anything, so a blocked pane that writes nothing is only noticed when its timeout runs out
 - The common forms of some commands are denied by rule at this depth. The rules catch the usual command form only, so they are not a complete block. Do not work around a denial by another route (such as \`sh -c\` or a full path): that is a rule you must follow, not something the rules enforce"
 
 if [ "$DEPTH" -eq 1 ]; then
@@ -516,7 +519,7 @@ Format:
 | child-2 | <role> | tests/ | waiting | |
 \`\`\`
 
-Write atomically: cat > \"${STATUS_FILE}.tmp\" ... && mv \"${STATUS_FILE}.tmp\" \"${STATUS_FILE}\"
+The wrapper creates the file before you start. Read it, then rewrite the whole file with the Write tool (or change it with Edit). Do not use \`mv\` or shell redirection for it.
 
 ## Task Delegation Criteria
 - Only delegate subtasks estimated at **10+ minutes** of work
@@ -559,7 +562,8 @@ After all children have completed and results are aggregated:
 1. List completed panes: \`ls ${WORK_DIR}/*.pane\`
 2. Close each pane: \`tmux kill-pane -t <pane_id>\` (read pane ID from .pane files)
 3. Leave the \`.pane\` files in place (the wrapper ignores dead panes, and your own record is among them)
-4. Update the status dashboard to reflect cleanup"
+4. Update the status dashboard to reflect cleanup
+Do this before you write your own result file: writing it tells the user's session you are done."
 
 elif [ "$DEPTH" -eq 2 ]; then
   NEXT_DEPTH=3
@@ -628,11 +632,7 @@ What was done and the outcome.
 Any unexpected findings or important observations.
 \`\`\`
 
-Write to a temporary file first, then rename:
-  cat > \"${RESULT_FILE}.tmp\" <<'RESULTEOF'
-  ... content ...
-  RESULTEOF
-  mv \"${RESULT_FILE}.tmp\" \"${RESULT_FILE}\""
+Write it with the Write tool, in one go, when you are done. Do not write it through a temporary file and \`mv\`."
 
 # --- Export env vars for Stop hook ---
 # The ccorch Stop hook (hooks/stop_signal.sh) reads these to signal the parent.
@@ -644,6 +644,8 @@ export CCORCH_WORK_DIR
 export CCORCH_PROJECT_DIR
 export CCORCH_PARENT_PANE="${CCORCH_PARENT_PANE:-}"
 export CCORCH_RESULT_FILE="$RESULT_FILE"
+# Only the session's Main Brain has its result copied to result.md by the Stop hook.
+export CCORCH_COPY_RESULT="$COPY_RESULT"
 
 # --- Launch Claude Code (interactive mode) ---
 # Interactive mode shows the TUI so users can see real-time progress.

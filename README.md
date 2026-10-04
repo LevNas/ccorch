@@ -68,7 +68,7 @@ Your Session ──► Main Brain (DEPTH=1)
 1. `/ccor` creates a **Main Brain** pane that analyzes and decomposes your task
 2. Main Brain delegates subtasks to **Child** panes for parallel execution
 3. Children can further delegate to **Grandchild** panes (max depth)
-4. Results flow back up via `tmux wait-for` signals and file exchange under `/tmp/ccorch/<session_id>/`
+4. Results flow back up via `tmux wait-for` signals and file exchange under `/tmp/ccorch/<session_id>/`. A pane signals its parent once it has written its result file, not at every turn; the Main Brain's result is copied to `result.md` for your session
 5. Your session continues working in parallel — you're notified on completion
 
 ### Safety

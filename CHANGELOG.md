@@ -2,6 +2,32 @@
 
 Earlier versions: see the git history.
 
+## 0.6.1 — 2026-10-04
+
+Two problems found by the 0.6.0 live check (refs #11).
+
+### Fixed
+
+- **The parent was signalled before there was a result to read.** The Stop hook runs at
+  the end of every turn and signalled every time; in the live check the user's session was
+  woken three times before `result.md` existed. The hook now signals only once the pane's
+  result file exists and is non-empty, and for the Main Brain it copies the result to
+  `result.md` first. `/ccor` waits again until `result.md` exists. The wrapper's exit copies
+  the result again when it is newer than `result.md`.
+- **Panes stopped at a user's ask rule on `mv`.** The prompt told panes to write
+  `status.md` and the result file through a temporary file and `mv`; an ask rule such as
+  `Bash(mv *)` overrides auto mode, so the pane waited for a human. Panes now write both
+  with the Write tool (or Edit). `/ccor` no longer deletes `.pane` files with `rm` in its
+  cleanup step; the wrapper ignores dead panes.
+
+### Changed
+
+- The prompt says that writing the result file is the completion signal: write it once, at
+  the end, and do not write a provisional result there. The Main Brain closes its children's
+  panes before writing its own result.
+- A pane that is stuck and has written no result no longer wakes its parent at every turn;
+  the parent hears from it when that pane's `CCORCH_TIMEOUT` runs out.
+
 ## 0.6.0 — 2026-10-04
 
 The depth and pane limits are now enforced by the wrapper, and panes run in auto
