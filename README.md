@@ -108,7 +108,14 @@ later is installed, it provides the moved parts:
   see the file appear as untracked.
 - If your repository commits `.claude/`, ignore `.claude/ccharness/` as well.
 - Environment variables `CCORCH_GATE`, `CCORCH_MODEL_GUARD` and
-  `CCORCH_MAX_PARALLEL` no longer exist.
+  `CCORCH_MAX_PARALLEL` no longer exist. Replacements:
+  - `CCORCH_MAX_PARALLEL` (the parallel cap) → the official
+    `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`, in the `env` block of your settings
+  - `CCORCH_MODEL_GUARD` (the deny for spawns without a model) → the official
+    `CLAUDE_CODE_SUBAGENT_MODEL`, in the `env` block of your settings
+  - `CCORCH_GATE` (the catalog tier check; `CCORCH_MODEL_GUARD=off` was an alias
+    of `CCORCH_GATE=off`) → ccharness's tier guard hook, if installed; its off
+    switch is `CCHARNESS_TIER_GUARD=off`
 
 ## Optional Integrations
 
