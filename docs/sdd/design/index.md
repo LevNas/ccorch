@@ -8,7 +8,7 @@
 - [x] Technology: tmux (wait-for signaling), Claude Code CLI (`-p`, `--allowedTools`, `--append-system-prompt`)
 - [x] Architecture: 3-level tmux pane hierarchy with environment variable depth propagation
 - [x] Communication: `tmux wait-for` signals + file-based data exchange (`/tmp/ccorch/`)
-- [x] Safety: Multi-layer defense (tool restrictions, system prompt guards, Bash patterns)
+- [x] Safety: system prompt guard rails per depth, plus `--allowedTools` / `--disallowedTools` flags. The wrapper also passes `--dangerously-skip-permissions`; whether the flags restrict anything under that bypass is not verified (see Security Considerations)
 - [x] Plugin format: Claude Code plugin (`.claude-plugin/plugin.json`, skills, hooks)
 - [x] Distribution: claudecode-plugins marketplace
 
@@ -74,12 +74,23 @@ Grandchild (DEPTH=3)
 
 ## Security Considerations
 
-### Depth-Based Tool Restrictions
+### Depth-Based Tool Flags
 
-Each depth level has progressively stricter tool permissions:
+What the wrapper passes (`scripts/ccorch-wrapper.sh`), and what `claude --help` says about each flag:
+
+| Flag | DEPTH 1, 2 | DEPTH 3 | `claude --help` |
+|------|-----------|---------|-----------------|
+| `--dangerously-skip-permissions` | yes | yes | "Bypass all permission checks" |
+| `--allowedTools` | `Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent` | same without `tmux:*` and `Agent` | list of tool names "to allow" |
+| `--disallowedTools` | not passed | `"Agent"` | list of tool names "to deny" |
+| `--append-system-prompt` | yes | yes | appends a system prompt |
+
+The help text does not say whether `--allowedTools` or `--disallowedTools` restrict anything while permissions are bypassed: **not verified**. The allowlists at DEPTH 1 and 2 are identical. The Bash patterns are not a verified block on destructive commands; the only stated ban on them is the system prompt. The blocks below show the intended flags per depth.
+
+Intended flags per depth (DEPTH 1 and 2 are identical; only DEPTH 3 differs; see the table above for what is verified):
 
 ```bash
-# DEPTH=1 (Main Brain)
+# DEPTH=1 (Main Brain) — intended flags; the table above says what is verified
 claude --dangerously-skip-permissions \
   --allowedTools "Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent" \
   --append-system-prompt "You are CCORCH Main Brain (DEPTH=1)..." \

@@ -29,6 +29,7 @@ If ccharness 0.9.0 is installed:
 ### Migration
 
 - Replace `ccorch:<type>` with `ccharness:<type>` in your own rules and prompts.
+- Replace `/ccor-parallel` with `/ccharness:parallel-worktree`.
 - Old ledger: delete `.claude/ccorch/ledger.jsonl` first, then drop its
   `.gitignore` line.
 - `/ccor` is unchanged.
