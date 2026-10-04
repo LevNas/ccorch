@@ -72,8 +72,9 @@ Your Session ──► Main Brain (DEPTH=1)
 
 ### Safety
 
-- **Permissions are bypassed**: every pane starts with `--dangerously-skip-permissions`. Whether the `--allowedTools` / `--disallowedTools` flags restrict anything under it is unverified; [NFR-SEC-003](docs/sdd/requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention) has the details
-- **Guard rails**: destructive commands (`git push --force`, `git reset --hard`, `branch -D`, `rm -rf`) and pane creation at DEPTH 3 are forbidden in each pane's system prompt (`--append-system-prompt`); no verified flag blocks them
+- **Panes run in auto mode**: every pane starts with `--permission-mode auto`, not a permission bypass. Auto mode's classifier reviews actions; when it blocks one, a human may have to approve or redirect it in that pane
+- **Start gate**: before `claude` starts, the wrapper refuses a pane when a limit is not a positive integer, when the depth is not 1-3 or does not follow from the parent's recorded depth, when a second Main Brain starts in one session, when the live ccorch panes would exceed `CCORCH_MAX_PANES`, or when the live children under one parent would exceed `CCORCH_MAX_CHILDREN_D1` / `_D2`. A refused child returns `status: refused` with the reason in its result file. The gate uses a portable `mkdir` lock (no `flock`, so it works on macOS). It bounds a model that uses the documented launch command; a process that rewrites its own environment or runs `claude` directly can escape it, and then the auto-mode classifier is the boundary
+- **Deny rules**: every depth denies the common forms of `rm -rf`, force push, branch delete, `git reset --hard`, `git clean` and `sudo`; depth 2 and 3 also deny `git push`; depth 3 also denies the Agent tool and `tmux`. The Bash deny rules are not a security boundary: they miss other flag spellings, full paths, `sh -c`, aliases and the like. The boundaries are the classifier and the start gate. See [NFR-SEC-003](docs/sdd/requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention) and [DEC-006](docs/sdd/design/decisions/DEC-006.md)
 - **Timeout**: Panes auto-terminate after configurable timeout (default: 600s)
 
 ## Configuration
@@ -81,7 +82,7 @@ Your Session ──► Main Brain (DEPTH=1)
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `CCORCH_TIMEOUT` | `600` | Timeout in seconds per pane |
-| `CCORCH_MAX_PANES` | `8` | Maximum total panes per session |
+| `CCORCH_MAX_PANES` | `8` | Maximum live ccorch panes per session, Main Brain included (enforced by the start gate) |
 | `CCORCH_MAX_CHILDREN_D1` | `3` | Max concurrent children for Main Brain |
 | `CCORCH_MAX_CHILDREN_D2` | `2` | Max concurrent grandchildren per Child |
 

@@ -58,7 +58,7 @@ All implementation details have been defined in the design phase.
 
 | Risk | Impact | Probability | Mitigation |
 |------|--------|-------------|------------|
-| `--allowedTools` Bash pattern syntax changes in future Claude Code versions | Medium | Low | Pin to documented syntax, test on upgrade |
+| `--disallowedTools` Bash pattern syntax or auto-mode behaviour changes in future Claude Code versions | Medium | Low | Pin to documented syntax; `tests/test_wrapper.sh` checks the arguments, and the live check is manual |
 | tmux wait-for channel name collision across concurrent sessions | Low | Low | Session ID includes timestamp |
 | Wrapper script quoting issues with complex task descriptions | Medium | Medium | Test with special characters, use heredoc |
 

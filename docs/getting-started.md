@@ -111,6 +111,16 @@ The knobs are the `CCORCH_*` environment variables in the
 `CCORCH_MAX_CHILDREN_D1` (default `3`): every pane is a running Claude Code
 instance, so lower it on a modest host.
 
+The pane and children limits are enforced by the wrapper before a pane starts.
+A pane over a limit does not run; it returns `status: refused` with the reason.
+
+Panes run in auto mode (`--permission-mode auto`), not with a permission
+bypass. If the auto-mode classifier blocks an action, that pane may wait for
+you: look at the pane, then approve or redirect it. Destructive commands are
+denied by rule in their usual forms, and `git push` is denied in the Child and
+Grandchild panes; these Bash rules cover the usual command form only and are not
+a security boundary.
+
 ## Close the loop with ccmemo
 
 A pane run discovers more than one context window can retain — and without
