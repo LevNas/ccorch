@@ -694,8 +694,12 @@ if [ "$DEPTH" -ge 3 ]; then
   DENY_RULES+=('Agent' 'Bash(tmux *)')
 fi
 
+# --add-dir: the session directory is outside the project. Without it, a Read of status.md
+# there asked for approval in auto mode (Claude Code v2.1.288) and stopped the pane; the
+# result files are in the same directory. It takes several paths, so it comes before another flag.
 CLAUDE_CMD=(
   claude
+  --add-dir "$OUT_DIR"
   --permission-mode auto
   --disallowedTools "${DENY_RULES[@]}"
   --append-system-prompt "$SYSTEM_PROMPT"

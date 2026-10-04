@@ -244,6 +244,14 @@ mode_is_auto() {
   argv_elements | awk 'prev=="--permission-mode"{print} {prev=$0}' | grep -qxF auto
 }
 argv_has() { printf '%s\n' "$OUT" | grep -qF -- "$1"; }
+# add_dir_is_out_dir — the element right after --add-dir is this run's OUT_DIR
+add_dir_is_out_dir() {
+  [ -n "$RESULT_DIR" ] && argv_elements | awk 'prev=="--add-dir"{print} {prev=$0}' | grep -qxF -- "$RESULT_DIR"
+}
+# add_dir_before_mode — --add-dir comes before --permission-mode (it takes several paths)
+add_dir_before_mode() {
+  argv_elements | awk '$0=="--add-dir"{a=NR} $0=="--permission-mode"{m=NR} END{exit !(a && m && a<m)}'
+}
 
 # file_is <path> <content> — a record holds exactly this content
 file_is() { [ -f "$1" ] && [ "$(cat "$1")" = "$2" ]; }
@@ -277,6 +285,8 @@ for depth in 1 2 3; do
   expect_not "depth $depth: no --dangerously-skip-permissions" argv_has '--dangerously-skip-permissions'
   expect_not "depth $depth: no --allowedTools" argv_has '--allowedTools'
   expect "depth $depth: auto follows --permission-mode" mode_is_auto
+  expect "depth $depth: --add-dir gives the session directory" add_dir_is_out_dir
+  expect "depth $depth: --add-dir comes before --permission-mode" add_dir_before_mode
   for rule in "${ALL_RULES[@]}"; do
     expect "depth $depth: deny rule '$rule' between the flags" has_deny "$rule"
   done
