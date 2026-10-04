@@ -15,7 +15,8 @@
 #   copies again, so a rewritten result is followed.
 # - When that copy fails, the Main Brain does not signal: result.md would be missing or
 #   older than the result. A later Stop copies again, and the wrapper copies and signals
-#   when it ends.
+#   when it ends. With no CCORCH_WORK_DIR (only when run by hand; the wrapper always sets
+#   it) there is nowhere to copy to, so it does not signal either.
 
 [ -n "${CCORCH_PARENT_CHANNEL:-}" ] || exit 0
 

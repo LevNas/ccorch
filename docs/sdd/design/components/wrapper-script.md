@@ -114,8 +114,11 @@ makes it, not the parents' prompts.
   not checked.
 - Checked only on tmux 3.7b, with a private tmux server and a fake `claude`
   (`tests/test_tmux_hook.sh`); not with a real Claude pane, and not on older tmux.
-- Not covered: a SIGKILL before the hook is set (during the gate), and `kill-pane`, which runs
-  no hook but makes the trap signal.
+- Not covered: a SIGKILL before the hook is set (during the gate, or between arming it and
+  starting `claude`), a SIGKILL during `cleanup()` after the hook is removed and before the
+  trap's result and signal, and `kill-pane`, which runs no hook but makes the trap signal.
+- `/ccor`'s safety exit matches pane ids from `depth1-*.pane`; after a tmux server restart a
+  stale file could match a reused pane id and the loop would keep waiting. Not handled.
 
 ### Atomic Result File Write
 

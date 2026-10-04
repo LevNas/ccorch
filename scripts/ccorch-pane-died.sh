@@ -47,10 +47,12 @@ else
   rm -f "$tmp" 2>/dev/null
 fi
 
-# The same rule as the wrapper's cleanup() for a wrapper that ran claude (the hook is set only
-# after claude starts): copy when result.md is absent or differs, so a result rewritten after
-# the last Stop is not hidden by an older copy. If the copy fails, an older result.md is
-# removed rather than read as this result.
+# The same rule as the wrapper's cleanup() after claude ran: copy when result.md is absent or
+# differs, so a result rewritten after the last Stop is not hidden by an older copy. If the
+# copy fails, an older result.md is removed rather than read as this result. The hook is set
+# after the start gate and just before claude starts, so any older result.md here belongs to
+# this session's earlier Main Brain, never to another one running now (a second one is
+# refused at the gate, before the hook is set).
 if [ "$COPY_RESULT" = 1 ] && [ -s "$RESULT_FILE" ] \
    && ! cmp -s "$RESULT_FILE" "${WORK_DIR}/result.md" 2>/dev/null; then
   copy_tmp="${WORK_DIR}/result.md.pane-died-$$.tmp"

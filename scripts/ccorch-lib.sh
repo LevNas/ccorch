@@ -3,7 +3,9 @@
 
 # publish_if_absent <tmp> <target>
 # Puts <tmp> at <target> only when <target> has no result yet, and removes <tmp> either way.
-# Returns 0 when <tmp> was published, 1 when <target> already held a result.
+# Returns 0 when <tmp> was published, 1 when <target> already held a result, and 2 when
+# <target> has no result but <tmp> could not be put there (read-only directory, full disk):
+# a caller enforcing a timeout must still act on 2.
 #
 # `ln` fails atomically when <target> exists, so a non-empty result a pane wrote is never
 # overwritten. Where hard links are not available (`ln` fails and <target> does not exist),
@@ -32,5 +34,6 @@ publish_if_absent() {
     fi
   fi
   rm -f "$tmp"
-  return 1
+  [ -s "$target" ] && return 1
+  return 2
 }

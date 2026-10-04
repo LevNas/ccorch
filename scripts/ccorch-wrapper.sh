@@ -748,7 +748,8 @@ fi
 # the wrapper behaves as before 0.6.3. A channel cannot start with "-" (tmux would read it as
 # a flag), a pane id is % and digits, and paths are absolute.
 PANE_HOOK_ARMED=""
-plain_value() { # plain_value <value> <regex for the whole value>
+plain_value() { # plain_value <value> <regex for the whole value>, ranges in the C locale
+  local LC_ALL=C
   [[ "$1" =~ ^$2$ ]]
 }
 if plain_value "$PARENT_CHANNEL" '[A-Za-z0-9_][A-Za-z0-9_-]*' \
@@ -798,7 +799,11 @@ EOF
     # Kill the main process group once the timeout result is in place, or when it could not
     # even be written (the cleanup then writes an error result) and the pane still has none.
     if [ -s "$timeout_tmp" ]; then
-      if publish_if_absent "$timeout_tmp" "$RESULT_FILE"; then
+      # 0: the timeout result went in; 2: no result, and it could not be put there. Either
+      # way the pane is past its timeout. 1: the pane's own result is there; leave it.
+      pub_rc=0
+      publish_if_absent "$timeout_tmp" "$RESULT_FILE" || pub_rc=$?
+      if [ "$pub_rc" -ne 1 ]; then
         kill 0 2>/dev/null || true
       fi
     elif [ ! -s "$RESULT_FILE" ]; then
