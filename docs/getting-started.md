@@ -25,6 +25,9 @@ agent records) is not part of ccorch since 0.5.0; see
 
 - [Claude Code](https://code.claude.com/docs/en/overview) CLI
 - `tmux` 1.8+ — required; `/ccor` must run inside a tmux session
+- [Auto mode](https://code.claude.com/docs/en/permission-modes) available to
+  your sessions, for panes that run without prompts (see
+  [Configuration](#configuration) for what happens without it)
 - Optional: [ghq](https://github.com/x-motemen/ghq) for the clone layout below
 
 ## Step 1 — Lay out your repositories
@@ -116,7 +119,12 @@ A pane over a limit does not run; it returns `status: refused` with the reason.
 
 Panes run in auto mode (`--permission-mode auto`), not with a permission
 bypass. If the auto-mode classifier blocks an action, that pane may wait for
-you: look at the pane, then approve or redirect it. Destructive commands are
+you: look at the pane, then approve or redirect it. When auto mode is not
+available to the session (a model that does not support it,
+`permissions.disableAutoMode` set to `"disable"`, or auto mode turned off by
+Anthropic), Claude Code starts the pane in Manual mode instead, and the pane
+asks you before most actions. A pane's status bar shows `auto mode on` only
+when auto mode is active. Destructive commands are
 denied by rule in their usual forms, and `git push` is denied in the Child and
 Grandchild panes; these Bash rules cover the usual command form only and are not
 a security boundary.

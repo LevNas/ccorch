@@ -15,6 +15,7 @@ ccharness provides it — see
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI
 - [tmux](https://github.com/tmux/tmux) 1.8+ (required; `/ccor` must run inside a tmux session)
+- [Auto mode](https://code.claude.com/docs/en/permission-modes) available to your sessions, for panes that run without prompts. When it is not available (a model that does not support it, `permissions.disableAutoMode` set to `"disable"` in any settings file, or auto mode turned off by Anthropic), Claude Code starts each pane in Manual mode instead, and the pane asks you before most actions. ccorch still works, but someone has to answer in each pane
 
 ## Installation
 
@@ -72,7 +73,7 @@ Your Session ──► Main Brain (DEPTH=1)
 
 ### Safety
 
-- **Panes run in auto mode**: every pane starts with `--permission-mode auto`, not a permission bypass. Auto mode's classifier reviews actions; when it blocks one, a human may have to approve or redirect it in that pane
+- **Panes run in auto mode**: every pane starts with `--permission-mode auto`, not a permission bypass. Auto mode's classifier reviews actions; when it blocks one, a human may have to approve or redirect it in that pane. When auto mode is not available, the pane starts in Manual mode and prompts instead; its status bar shows `auto mode on` only when auto mode is active. The start gate and the deny rules below apply in every mode
 - **Start gate**: before `claude` starts, the wrapper refuses a pane when a limit is not a positive integer, when the depth is not 1-3 or does not follow from the parent's recorded depth, when a second Main Brain starts in one session, when the live ccorch panes would exceed `CCORCH_MAX_PANES`, or when the live children under one parent would exceed `CCORCH_MAX_CHILDREN_D1` / `_D2`. A refused child returns `status: refused` with the reason in its result file. The gate uses a portable `mkdir` lock (no `flock`, so it works on macOS). It bounds a model that uses the documented launch command; a process that rewrites its own environment or runs `claude` directly can escape it, and then the auto-mode classifier is the boundary
 - **Deny rules**: every depth denies the common forms of `rm -rf`, force push, branch delete, `git reset --hard`, `git clean` and `sudo`; depth 2 and 3 also deny `git push`; depth 3 also denies the Agent tool and `tmux`. The Bash deny rules are not a security boundary: they miss other flag spellings, full paths, `sh -c`, aliases and the like. The boundaries are the classifier and the start gate. See [NFR-SEC-003](docs/sdd/requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention) and [DEC-006](docs/sdd/design/decisions/DEC-006.md)
 - **Timeout**: Panes auto-terminate after configurable timeout (default: 600s)

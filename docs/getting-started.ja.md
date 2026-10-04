@@ -21,6 +21,7 @@ ccorch の仕事は1つで、作業を**別々の tmux ペイン**に分ける�
 
 - [Claude Code](https://code.claude.com/docs/en/overview) CLI
 - `tmux` 1.8 以上（必須。`/ccor` は tmux セッションの中で実行します）
+- [auto モード](https://code.claude.com/docs/en/permission-modes)が使えること（ペインを確認なしで動かすため。使えないときの動きは「[設定](#設定)」を参照）
 - 任意: [ghq](https://github.com/x-motemen/ghq)（後述のクローン配置を自動化）
 
 ## 手順1: リポジトリを配置する
@@ -109,6 +110,8 @@ tmux セッションを開始（または接続）し、その中で Claude Code
 ペインは権限バイパスではなく、auto モード（`--permission-mode auto`）で動きます。
 auto モードの分類器が操作をブロックすると、そのペインが人の判断を待つことがあります。
 そのときはペインを確認し、承認するか、指示を出し直してください。
+auto モードが使えないとき（auto モードに対応していないモデル、設定ファイルの `permissions.disableAutoMode` が `"disable"`、Anthropic 側で一時的に止めている場合）は、Claude Code がペインを Manual モードで起動し、ほとんどの操作の前に確認を求めます。
+auto モードが有効なときだけ、ペインの状態行に `auto mode on` と表示されます。
 破壊的なコマンドの通常の形は deny ルールで拒否され、`git push` は Child と Grandchild のペインで拒否されます。
 これらの Bash ルールは通常のコマンド形だけを捉えるもので、セキュリティ境界ではありません。
 
