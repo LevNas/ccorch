@@ -113,7 +113,8 @@ makes it, not the parents' prompts.
   under the user's shell and `/bin/sh` (here zsh, and bash as `/bin/sh`); other shells are
   not checked.
 - Checked only on tmux 3.7b, with a private tmux server and a fake `claude`
-  (`tests/test_tmux_hook.sh`); not with a real Claude pane, and not on older tmux.
+  (`tests/test_tmux_hook.sh`), and live on 2026-10-05 with a real Claude child pane killed with
+  SIGKILL (DEC-006, Consequences); not on older tmux, and not with a SIGKILLed Main Brain.
 - Not covered: a SIGKILL before the hook is set (during the gate, or between arming it and
   starting `claude`), a SIGKILL during `cleanup()` after the hook is removed and before the
   trap's result and signal, and `kill-pane`, which runs no hook but makes the trap signal.

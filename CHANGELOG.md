@@ -19,11 +19,11 @@ The four NITs deferred from #13's review (refs #11).
   `pane-exited` hook does not work (it goes away with the pane), and a server-level hook would
   change the user's tmux settings. A pane-level `remain-on-exit` or `pane-died` the user had
   set on that pane is lost. The shell tmux starts the pane with must exec the wrapper (checked
-  for zsh and bash). Checked only on tmux 3.7b with a private server and a fake `claude`
-  (`tests/test_tmux_hook.sh`); not yet checked with a real Claude pane. Not covered: a SIGKILL
-  before the hook is set (during the start gate, or between arming the hook and starting
-  `claude`), and one during `cleanup()` after the hook is removed and before the trap's
-  result and signal.
+  for zsh and bash). Checked on tmux 3.7b with a private server and a fake `claude`
+  (`tests/test_tmux_hook.sh`), and live on 2026-10-05 with a real Claude child pane killed with
+  SIGKILL (DEC-006, Consequences). Not covered: a SIGKILL before the hook is set (during the
+  start gate, or between arming the hook and starting `claude`), and one during `cleanup()`
+  after the hook is removed and before the trap's result and signal.
 - **The watchdog could overwrite a result written at the last moment.** It tested for a
   result and then `mv`ed `status: timeout` over the file, and killed the pane either way. It
   now publishes with `publish_if_absent` (new `scripts/ccorch-lib.sh`): `ln` fails when the

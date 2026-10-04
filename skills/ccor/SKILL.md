@@ -90,8 +90,10 @@ result file exists, it copies that file to `${WORK_DIR}/result.md` and signals `
 Turns that end before the result file exists send no signal. (Children and grandchildren
 signal their parent at every turn instead; the parent checks for their result file and
 waits again.) The Main Brain's session stays
-open after that; the wrapper finishes when the pane is closed or `CCORCH_TIMEOUT` runs out,
-and then copies the result again if it was rewritten.
+open after that; the wrapper finishes when the pane is closed or its `claude` exits, and
+then copies the result again if it was rewritten. `CCORCH_TIMEOUT` does not close it: the
+watchdog acts only on a pane that has written no result, so a finished Main Brain's pane
+stays open until it is closed (step 7).
 
 ### 5. Background Completion Wait
 
@@ -188,7 +190,7 @@ This decision is delegated to the Main Brain based on task analysis.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CCORCH_TIMEOUT` | `600` | Timeout in seconds per pane |
+| `CCORCH_TIMEOUT` | `600` | Timeout in seconds for a pane that has written no result |
 | `CCORCH_MAX_PANES` | `8` | Maximum live ccorch panes per session, Main Brain included; your own pane is not counted |
 | `CCORCH_MAX_CHILDREN_D1` | `3` | Max concurrent children for the Main Brain |
 | `CCORCH_MAX_CHILDREN_D2` | `2` | Max concurrent grandchildren per Child |
