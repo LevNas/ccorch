@@ -22,11 +22,11 @@ ccorch is a tmux-based orchestration plugin for Claude Code. Running the `/ccor`
 | REQ-001 | `/ccor` skill creates Main Brain pane automatically | US-001 | Defined |
 | REQ-002 | User session continues parallel work after launch | US-001 | Defined |
 | REQ-003 | Depth propagation via CCORCH_DEPTH env var | US-002 | Defined |
-| REQ-004 | Prohibit pane creation at DEPTH=3 (see [NFR-SEC-003](nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention)) | US-002 | Unverified |
+| REQ-004 | Prohibit pane creation at DEPTH=3 (see [NFR-SEC-003](nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention)) | US-002 | Verified (0.6.0) |
 | REQ-005 | tmux wait-for based signaling | US-003 | Defined |
 | REQ-006 | File-based data exchange via /tmp/ccorch/<session_id>/ | US-003 | Defined |
 | REQ-007 | Timeout to prevent infinite blocking | US-003 | Defined |
-| REQ-008 | Depth-based tool flags via --allowedTools (see [NFR-SEC-003](nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention)) | US-004 | Unverified |
+| REQ-008 | Depth-based tool flags via --disallowedTools; panes in auto mode (see [NFR-SEC-001](nfr/security.md#nfr-sec-001-tool-restriction-enforcement) and [NFR-SEC-003](nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention)) | US-004 | Verified (0.6.0) |
 | REQ-009 | Guard rails via --append-system-prompt | US-004 | Defined |
 | REQ-010 | ccmemo record-knowledge / plan-task integration | US-005 | Defined |
 | REQ-011 | Standalone operation without ccmemo | US-005 | Defined |
@@ -43,7 +43,7 @@ ccorch is a tmux-based orchestration plugin for Claude Code. Running the `/ccor`
 ## Dependencies
 
 - **tmux** 1.8+: Required for `wait-for` command support
-- **Claude Code CLI**: Requires `--dangerously-skip-permissions`, `--allowedTools`, `--append-system-prompt` flags (interactive launch; the task is delivered with tmux `paste-buffer`)
+- **Claude Code CLI**: Requires `--permission-mode auto`, `--disallowedTools`, `--append-system-prompt` flags (interactive launch; the task is delivered with tmux `paste-buffer`)
 - **ccmemo** (optional): Integration features activate only when installed
 
 ## Out of Scope

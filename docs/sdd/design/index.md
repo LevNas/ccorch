@@ -5,10 +5,10 @@
 
 ## Explicitly Specified Information
 
-- [x] Technology: tmux (wait-for signaling), Claude Code CLI (interactive, `--allowedTools`, `--append-system-prompt`)
+- [x] Technology: tmux (wait-for signaling), Claude Code CLI (interactive, `--permission-mode auto`, `--disallowedTools`, `--append-system-prompt`)
 - [x] Architecture: 3-level tmux pane hierarchy with environment variable depth propagation
 - [x] Communication: `tmux wait-for` signals + file-based data exchange (`/tmp/ccorch/`)
-- [x] Safety: system prompt guard rails per depth, plus `--allowedTools` / `--disallowedTools` flags. The wrapper also passes `--dangerously-skip-permissions` (see Security Considerations)
+- [x] Safety: a start gate in the wrapper that enforces the depth, pane and children limits, per-depth `--disallowedTools` rules, panes in auto mode, and system prompt guard rails per depth (see Security Considerations and [DEC-006](decisions/DEC-006.md))
 - [x] Plugin format: Claude Code plugin (`.claude-plugin/plugin.json`, skills, hooks)
 - [x] Distribution: claudecode-plugins marketplace
 
@@ -71,6 +71,7 @@ Grandchild (DEPTH=3)
 | DEC-003 | /tmp/ for result storage (not .claude/) | Approved | [Details](decisions/DEC-003.md) @decisions/DEC-003.md |
 | DEC-004 | v2 subagent-default hybrid; three conditions for panes | Partially superseded by DEC-005 (pane conditions stand) | [Details](decisions/DEC-004.md) @decisions/DEC-004.md |
 | DEC-005 | ccorch is pane orchestration only; in-session distribution moved to ccharness | Accepted | [Details](decisions/DEC-005.md) @decisions/DEC-005.md |
+| DEC-006 | Panes run in auto mode; limits enforced by a start gate | Accepted (complements DEC-002) | [Details](decisions/DEC-006.md) @decisions/DEC-006.md |
 
 ## Security Considerations
 
@@ -78,26 +79,25 @@ Grandchild (DEPTH=3)
 
 What the wrapper passes (`scripts/ccorch-wrapper.sh`), and what `claude --help` says about each flag:
 
-| Flag | DEPTH 1, 2 | DEPTH 3 | `claude --help` |
-|------|-----------|---------|-----------------|
-| `--dangerously-skip-permissions` | yes | yes | "Bypass all permission checks" |
-| `--allowedTools` | `Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent` | same without `tmux:*` and `Agent` | list of tool names "to allow" |
-| `--disallowedTools` | not passed | `"Agent"` | list of tool names "to deny" |
-| `--append-system-prompt` | yes | yes | appends a system prompt |
+| Flag | DEPTH 1 | DEPTH 2 | DEPTH 3 |
+|------|---------|---------|---------|
+| `--permission-mode` | `auto` | `auto` | `auto` |
+| `--disallowedTools` | `Bash(rm -rf *)` `Bash(git push --force *)` `Bash(git push -f *)` `Bash(git reset --hard *)` `Bash(git clean *)` `Bash(sudo *)` | the DEPTH 1 rules and `Bash(git push *)` | the DEPTH 2 rules, `Agent` and `Bash(tmux *)` |
+| `--append-system-prompt` | yes | yes | yes |
 
-What these flags restrict under the permission bypass is unverified; see [NFR-SEC-003](../requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention).
+The permission bypass flag and `--allowedTools` are not passed: allow rules have no effect under the bypass, while deny rules hold in every mode. The Bash deny rules catch the usual command form only and are not a security boundary; the boundaries are the auto-mode classifier and the start gate, which refuses a pane over the depth, pane or children limits. See [NFR-SEC-003](../requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention) and [DEC-006](decisions/DEC-006.md).
 
 What the wrapper runs (interactive Claude Code; the task is not passed with `-p`):
 
 ```bash
-# DEPTH 1 and 2
-claude --dangerously-skip-permissions \
-  --allowedTools "Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent" \
+# DEPTH 1
+claude --permission-mode auto \
+  --disallowedTools 'Bash(rm -rf *)' 'Bash(git push --force *)' 'Bash(git push -f *)' \
+                    'Bash(git reset --hard *)' 'Bash(git clean *)' 'Bash(sudo *)' \
   --append-system-prompt "$SYSTEM_PROMPT"
 
-# DEPTH 3: same, with the allowlist "Read Edit Write Bash(git:status,git:diff,git:add,git:commit) Grep Glob"
-# and one more flag
-  --disallowedTools "Agent"
+# DEPTH 2: the same, with 'Bash(git push *)' added to --disallowedTools
+# DEPTH 3: DEPTH 2, with 'Agent' and 'Bash(tmux *)' added to --disallowedTools
 
 # Task delivery, started in the background before claude launches:
 sleep 3; tmux load-buffer "$TASK_FILE"; tmux paste-buffer -t "$CURRENT_PANE"; sleep 0.5; tmux send-keys -t "$CURRENT_PANE" Enter
@@ -191,5 +191,6 @@ docs/sdd/design/
     ├── DEC-002.md              # Environment variable depth propagation
     ├── DEC-003.md              # /tmp/ result storage
     ├── DEC-004.md              # v2 hybrid; three pane conditions
-    └── DEC-005.md              # pane orchestration only
+    ├── DEC-005.md              # pane orchestration only
+    └── DEC-006.md              # auto mode and the start gate
 ```

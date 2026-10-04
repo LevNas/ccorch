@@ -15,9 +15,10 @@ Implement the wrapper script that launches Claude Code in child panes with signa
    - `trap cleanup EXIT` for signal guarantee
    - Timeout watchdog (background subshell with `sleep` + `kill 0`)
    - Atomic result file writes (tmp → mv)
-   - Depth-based `--allowedTools` / `--disallowedTools` construction
+   - Depth-based `--disallowedTools` construction and `--permission-mode auto` (0.6.0; see [DEC-006](../../design/decisions/DEC-006.md))
+   - Start gate for the depth, pane and children limits (0.6.0)
    - System prompt injection via `--append-system-prompt`
-   - Child ID generation (`depth${DEPTH}-$(date +%s%N | tail -c 6)`)
+   - Child ID generation (`depth${DEPTH}-$$-${RANDOM}` since 0.6.0)
 
 3. Environment variable validation:
    ```bash
@@ -35,8 +36,9 @@ Implement the wrapper script that launches Claude Code in child panes with signa
 - [ ] `trap EXIT` guarantees signal delivery to parent
 - [ ] Timeout watchdog kills process and writes timeout result
 - [ ] Result files are written atomically (tmp → mv)
-- [ ] DEPTH=3 has `--disallowedTools "Agent"` enforced
-- [ ] DEPTH=1/2 allow Agent tool and tmux Bash patterns
+- [ ] DEPTH=3 denies `Agent` and `Bash(tmux *)` through `--disallowedTools`
+- [ ] DEPTH=1/2 do not deny the Agent tool or tmux Bash patterns
+- [ ] Start gate refuses a pane over the depth, pane or children limits (`status: refused`)
 - [ ] No hardcoded paths (uses env vars)
 - [ ] Handles task descriptions with special characters (quotes, newlines)
 
@@ -44,7 +46,7 @@ Implement the wrapper script that launches Claude Code in child panes with signa
 - Test normal completion → result file + signal
 - Test timeout → timeout result + signal + process killed
 - Test crash (kill -9) → error result + signal (via trap)
-- Test DEPTH=3 → Agent not in allowedTools
+- Test DEPTH=3 → `Agent` and `Bash(tmux *)` in `--disallowedTools` (`tests/test_wrapper.sh`, dry run)
 
 ## Related
 - Design: @../../../design/components/wrapper-script.md
