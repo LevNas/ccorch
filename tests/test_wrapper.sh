@@ -26,7 +26,8 @@ mkdir -p "${ROOT}/tmp"
 FAKE_BIN="${ROOT}/bin"
 mkdir -p "$FAKE_BIN"
 
-# display-message prints $FAKE_PANE_ID (default %99; may be set empty). list-panes can fail
+# display-message prints the -t value when given, else $FAKE_PANE_ID (default %99; may be
+# set empty). list-panes can fail
 # (FAKE_LIST_FAIL), be slow (FAKE_LIST_DELAY, to force races), or signal the lock owner
 # with TERM first (FAKE_LIST_KILL, to end the wrapper while it holds the lock).
 cat > "${FAKE_BIN}/tmux" <<'EOF'
@@ -43,7 +44,13 @@ case "$1" in
     sleep "${FAKE_LIST_DELAY:-0}"
     cat "$FAKE_PANES_FILE"
     ;;
-  display-message) echo "${FAKE_PANE_ID-%99}" ;;
+  display-message)
+    # With -t <pane> it reports that pane, as tmux does; without, $FAKE_PANE_ID.
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-t" ]; then echo "$2"; exit 0; fi
+      shift
+    done
+    echo "${FAKE_PANE_ID-%99}" ;;
 esac
 exit 0
 EOF
@@ -160,7 +167,7 @@ run_wrapper() {
   done
   for v in "${UNSET_VARS[@]+"${UNSET_VARS[@]}"}"; do unset_args+=(-u "$v"); done
   RC=0
-  run_pg env -u CCORCH_PARENT_ID -u CCORCH_MAX_PANES -u TMUX_PANE \
+  run_pg env -u CCORCH_PARENT_ID -u CCORCH_MAX_PANES -u TMUX_PANE -u CCORCH_LOCK_WAIT \
       -u CCORCH_MAX_CHILDREN_D1 -u CCORCH_MAX_CHILDREN_D2 -u CCORCH_DRY_RUN \
       "${unset_args[@]+"${unset_args[@]}"}" "${kept[@]}" \
       bash "$WRAPPER" "${task_args[@]+"${task_args[@]}"}" > "${CASE_DIR}/out" 2> "${CASE_DIR}/err" < /dev/null || RC=$?
@@ -238,7 +245,7 @@ no_files() { # no_files <glob...> — none of the globs matches an existing file
 dir_is_empty() { [ -z "$(ls -A "$1")" ]; }
 tmux_logged() { grep -qF -- "$1" "$FAKE_TMUX_LOG"; }
 tmux_not_logged() { ! grep -qF -- "$1" "$FAKE_TMUX_LOG"; }
-lock_gone() { [ ! -e "${WORK_DIR}/.lock.d" ] && no_files "${WORK_DIR}"/.lock.d.stale.*; }
+lock_gone() { [ ! -e "${WORK_DIR}/.lock.d" ]; }
 claude_started() { [ -f "$FAKE_CLAUDE_ARGV" ]; }
 
 # Rules every depth denies; depth 2 and 3 add the second list.
@@ -560,7 +567,7 @@ launch_child() { # launch_child <n> — a real depth-2 start with its own pane i
   local n="$1"
   (
     RCN=0
-    run_pg env -u CCORCH_DRY_RUN -u TMUX_PANE TMPDIR="${ROOT}/tmp" CCORCH_DEPTH=2 CCORCH_SESSION_ID=test \
+    run_pg env -u CCORCH_DRY_RUN -u TMUX_PANE -u CCORCH_LOCK_WAIT TMPDIR="${ROOT}/tmp" CCORCH_DEPTH=2 CCORCH_SESSION_ID=test \
       CCORCH_PARENT_CHANNEL=test-channel CCORCH_WORK_DIR="$WORK_DIR" CCORCH_PROJECT_DIR="$ROOT" \
       CCORCH_TIMEOUT=30 CCORCH_PARENT_ID=parent-1 CCORCH_MAX_PANES=9 CCORCH_MAX_CHILDREN_D1=2 \
       FAKE_PANE_ID="%3${n}" FAKE_CLAUDE_ARGV="${CASE_DIR}/claude-argv.${n}" \
@@ -586,31 +593,68 @@ expect "three simultaneous children, D1=2: the refusal names CCORCH_MAX_CHILDREN
   bash -c 'grep -qF CCORCH_MAX_CHILDREN_D1 <<< "$1"' _ "${REFUSED_ERR:-}"
 expect "three simultaneous children: lock released" lock_gone
 
-# --- Lock: stale and held locks (real runs: a dry run takes no lock) ---
-
-new_case; sleep 0 & DEAD_PID=$!; wait "$DEAD_PID"
-mkdir "${WORK_DIR}/.lock.d"; printf '%s\n' "$DEAD_PID" > "${WORK_DIR}/.lock.d/owner"
-run_real 1
-expect "lock owned by a dead pid: recovered, claude started" claude_started
-expect "lock owned by a dead pid: nothing left behind" lock_gone
+# --- Lock: a lock that is held, or left behind, ends in a refusal naming it ---
+# There is no automatic recovery: the wait is bounded (CCORCH_LOCK_WAIT), then refused.
 
 new_case; sleep 60 & LIVE_OWNER=$!
 mkdir "${WORK_DIR}/.lock.d"; printf '%s\n' "$LIVE_OWNER" > "${WORK_DIR}/.lock.d/owner"
-run_real 1
-expect "lock owned by a live pid: refused after the timeout" refused_with "lock timeout"
-expect "lock owned by a live pid: left in place, owner unchanged" file_is "${WORK_DIR}/.lock.d/owner" "$LIVE_OWNER"
+run_real 1 CCORCH_LOCK_WAIT=1
+expect "lock held by a live pid: refused" refused_with "lock timeout"
+expect "lock held by a live pid: the reason names the lock directory" refused_with "${WORK_DIR}/.lock.d"
+expect "lock held by a live pid: the reason names the owner pid" refused_with "owner pid ${LIVE_OWNER}"
+expect "lock held by a live pid: the reason says to remove it" refused_with "remove this directory and retry"
+expect "lock held by a live pid: left as it was" file_is "${WORK_DIR}/.lock.d/owner" "$LIVE_OWNER"
+expect "lock held by a live pid: parent signalled" tmux_logged 'wait-for -S test-channel'
+expect_not "lock held by a live pid: claude not started" claude_started
 kill "$LIVE_OWNER" 2>/dev/null; wait "$LIVE_OWNER" 2>/dev/null
 
-new_case; mkdir "${WORK_DIR}/.lock.d"
-run_real 1
-expect "fresh lock with no owner file: not removed, refused after the timeout" refused_with "lock timeout"
-expect "fresh lock with no owner file: left in place" test -d "${WORK_DIR}/.lock.d"
+new_case; sleep 0 & DEAD_PID=$!; wait "$DEAD_PID"
+mkdir "${WORK_DIR}/.lock.d"; printf '%s\n' "$DEAD_PID" > "${WORK_DIR}/.lock.d/owner"
+run_real 1 CCORCH_LOCK_WAIT=1
+expect "lock left by a dead pid: not recovered, refused" refused_with "lock timeout"
+expect "lock left by a dead pid: left as it was" file_is "${WORK_DIR}/.lock.d/owner" "$DEAD_PID"
 
 new_case; mkdir "${WORK_DIR}/.lock.d"
-touch -t "$(date -d '2 minutes ago' +%Y%m%d%H%M 2>/dev/null || date -v-2M +%Y%m%d%H%M)" "${WORK_DIR}/.lock.d"
-run_real 1
-expect "old lock with no owner file: recovered, claude started" claude_started
-expect "old lock with no owner file: nothing left behind" lock_gone
+run_real 1 CCORCH_LOCK_WAIT=1
+expect "lock with no owner file: refused, the reason names it" refused_with "${WORK_DIR}/.lock.d"
+expect "lock with no owner file: left in place" test -d "${WORK_DIR}/.lock.d"
+
+new_case; run_dry 1 CCORCH_LOCK_WAIT=0
+expect "CCORCH_LOCK_WAIT=0: refused" refused_with "CCORCH_LOCK_WAIT must be a positive integer"
+new_case; run_dry 1 CCORCH_LOCK_WAIT=abc
+expect "CCORCH_LOCK_WAIT=abc: refused" refused_with "CCORCH_LOCK_WAIT must be a positive integer"
+new_case; run_dry 1 CCORCH_LOCK_WAIT=1000000
+expect "CCORCH_LOCK_WAIT with 7 digits: refused" refused_with "at most 6 digits"
+new_case; run_dry 1 CCORCH_MAX_PANES=1000000
+expect "CCORCH_MAX_PANES with 7 digits: refused" refused_with "at most 6 digits"
+new_case; run_dry 1 CCORCH_MAX_PANES=999999
+expect "CCORCH_MAX_PANES with 6 digits: accepted" gate_ok
+
+# --- The parent is signalled even when nothing can be written ---
+# A read-only work directory: the lock cannot be taken (mkdir fails), the refusal cannot be
+# written, and cleanup() cannot write a result. The signal must still go out.
+
+if [ "$(id -u)" -eq 0 ]; then
+  echo "NOTE: running as root, chmod does not bind root: skipping the read-only work directory case"
+else
+  new_case; chmod 555 "$WORK_DIR"
+  START=$SECONDS
+  run_real 1 CCORCH_LOCK_WAIT=1
+  ELAPSED=$((SECONDS - START))
+  chmod 755 "$WORK_DIR"
+  expect "read-only work directory: exit code 1" test "$RC" -eq 1
+  expect "read-only work directory: parent channel signalled" tmux_logged 'wait-for -S test-channel'
+  expect "read-only work directory: no record or result written" \
+    no_files "${WORK_DIR}"/*.pane "${WORK_DIR}"/*.parent "${WORK_DIR}"/*.depth "${WORK_DIR}"/*.md
+  expect "read-only work directory: finished in under 5 s (CCORCH_LOCK_WAIT honoured)" test "$ELAPSED" -lt 5
+fi
+
+# --- This pane is the one $TMUX_PANE names, not the active pane ---
+
+new_case; live %77 %active
+run_real 1 TMUX_PANE=%77 FAKE_PANE_ID=%active
+expect "TMUX_PANE=%77: wrapper exits 0" test "$RC" -eq 0
+expect "TMUX_PANE=%77: the recorded .pane holds %77" file_is "${WORK_DIR}/$(child_id).pane" %77
 
 # --- System prompt ---
 

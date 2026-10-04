@@ -27,6 +27,7 @@ ccorch-wrapper.sh <task_description>
 | `CCORCH_MAX_PANES` | Maximum live ccorch panes, Main Brain included (default: 8) |
 | `CCORCH_MAX_CHILDREN_D1` | Max live children of the Main Brain (default: 3) |
 | `CCORCH_MAX_CHILDREN_D2` | Max live grandchildren per Child (default: 2) |
+| `CCORCH_LOCK_WAIT` | Seconds to wait for the start lock, then refuse (default: 10) |
 | `CCORCH_PARENT_ID` | The parent's child ID; required at depth 2 and 3, unset at depth 1 |
 | `CCORCH_DRY_RUN` | If set: run the gate, print the `claude` argv, exit 0 without starting `claude` |
 
@@ -34,10 +35,10 @@ ccorch-wrapper.sh <task_description>
 
 1. Check `CCORCH_WORK_DIR` and `CCORCH_PARENT_CHANNEL`. If either is missing, no result file or signal is possible: print to stderr and exit 2. This is the only failure that does not go through a result file.
 2. Resolve `WORK_DIR` and `PROJECT_DIR` to absolute paths against `$PWD` (before any `cd`), create `WORK_DIR` (not in a dry run), read the other variables without `:?`, and compute `CHILD_ID` and `RESULT_FILE`. In a dry run, `OUT_DIR` is a fresh `mktemp -d` printed on the first line (`out_dir: <path>`); otherwise `OUT_DIR` is `WORK_DIR`. Every write of the process (result file, `status.md`, `result.md`, prompt dump) goes to `OUT_DIR`.
-3. Install `trap cleanup EXIT`. This comes before every check that can fail, so a missing task argument, a bad `PROJECT_DIR` or a bad number is a `status: refused` result with a signal, not a silent exit. The trap is the only EXIT trap: it releases the lock, writes the fallback result, copies a Main Brain's result to `result.md` when that is absent, and signals the parent. Front-matter values (`depth:`, `task:`, `reason:`) are sanitized to one line.
+3. Install `trap cleanup EXIT`. This comes before every check that can fail, so a missing task argument, a bad `PROJECT_DIR` or a bad number is a `status: refused` result with a signal, not a silent exit. The trap is the only EXIT trap: it starts with `set +e`, releases the lock, kills the watchdog, writes the fallback result, copies a Main Brain's result to `result.md` when that is absent, and signals the parent last. Every write in it is guarded, so a work directory that cannot be written does not stop the signal (a dry run does not signal). Front-matter values (`depth:`, `task:`, `reason:`) are sanitized to one line.
 4. **Start gate** (see [DEC-006](../decisions/DEC-006.md)):
-   - refuse if the task, `CCORCH_SESSION_ID` or `CCORCH_PROJECT_DIR` is missing, if `PROJECT_DIR` cannot be entered, if `CCORCH_TIMEOUT`, `CCORCH_MAX_PANES`, `CCORCH_MAX_CHILDREN_D1` or `CCORCH_MAX_CHILDREN_D2` is not a positive integer, or if the claimed depth is not 1, 2 or 3
-   - take the `mkdir` lock `$WORK_DIR/.lock.d` (not in a dry run: it records nothing). The holder writes its PID to `.lock.d/owner`. A lock is stale when the owner is dead (`kill -0` fails), or when it has no valid owner file and is more than a minute old. A stale lock is renamed away (atomic, so one waiter wins) and the renamed lock's owner is checked again; a live lock that replaced the stale one is put back. The wait is bounded (10 s, then "lock timeout"). `release_lock` removes the lock only if `owner` holds this PID
+   - refuse if the task, `CCORCH_SESSION_ID` or `CCORCH_PROJECT_DIR` is missing, if `PROJECT_DIR` cannot be entered, if `CCORCH_TIMEOUT`, `CCORCH_MAX_PANES`, `CCORCH_MAX_CHILDREN_D1`, `CCORCH_MAX_CHILDREN_D2` or `CCORCH_LOCK_WAIT` is not a positive integer of at most 6 digits, or if the claimed depth is not 1, 2 or 3
+   - take the `mkdir` lock `$WORK_DIR/.lock.d` (not in a dry run: it records nothing): bounded wait, then refuse; a lock left by a killed wrapper is removed by hand (the refusal names it). The holder writes its PID to `.lock.d/owner`; if that write fails the lock is removed and the start is refused. The wait is `CCORCH_LOCK_WAIT` seconds (default 10), tried every 0.1 s. A timeout is refused with a reason that names the lock directory and the owner pid, and says to remove the directory if no ccorch pane is running. Nothing else removes a lock, so `release_lock` clears its flag first and then removes the owner file and the directory
    - read the pane id with `tmux display-message -p -t "$TMUX_PANE"` (plain `display-message` only if `TMUX_PANE` is unset); refuse if it is empty or not in `tmux list-panes -a`, and refuse if that command fails
    - **derive the depth**: with no `CCORCH_PARENT_ID` the claimed depth must be 1 and no other live depth-1 record may exist in `$WORK_DIR`; with a parent, require its `<id>.pane` and `<id>.depth` records (depth 1 or 2) and a live parent pane, and refuse if `CCORCH_DEPTH` is not the parent's depth plus 1 (the reason names both). The effective depth drives the deny list, the children limit and the prompt
    - count live recorded panes (`*.pane` compared with the `list-panes` output, current pane excluded); refuse if the count plus this pane exceeds `CCORCH_MAX_PANES`
@@ -95,4 +96,4 @@ Runs as a background subshell, started after the gate and the dry-run exit:
 
 ## Tests
 
-`tests/test_wrapper.sh` runs the wrapper with `CCORCH_DRY_RUN=1` against a fake `tmux` and `claude`; CI runs it in `.github/workflows/lint.yml`.
+`tests/test_wrapper.sh` runs the wrapper against a fake `tmux` and a fake `claude`, in both dry (`CCORCH_DRY_RUN=1`) and real (non-dry) cases; the real cases cover the records, the lock, signalling on refusal and a failing write, `$TMUX_PANE`, and claude's exit status. CI runs it in `.github/workflows/lint.yml`.

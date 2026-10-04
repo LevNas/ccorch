@@ -25,7 +25,8 @@ mode ([DEC-006](docs/sdd/design/decisions/DEC-006.md), fixes #9).
   with a reason, parent signalled) when the depth is not 1-3, when the live ccorch
   panes would exceed `CCORCH_MAX_PANES`, or when the live siblings under one parent
   would exceed `CCORCH_MAX_CHILDREN_D1` / `_D2`. The check runs under a portable
-  `mkdir` lock (10 s timeout, stale-lock recovery), not `flock`, so it works on macOS.
+  `mkdir` lock (bounded wait, `CCORCH_LOCK_WAIT`, default 10 s, then refuse; a lock left by a killed
+  wrapper is removed by hand and the refusal names it), not `flock`, so it works on macOS.
   Depth is derived from the parent's recorded depth (`<id>.depth`), not taken from
   `CCORCH_DEPTH`, and a session has one Main Brain. The gate fails closed: a limit that is
   not a positive integer, or a failing `tmux list-panes`, is a refusal. It bounds a model
@@ -56,9 +57,7 @@ mode ([DEC-006](docs/sdd/design/decisions/DEC-006.md), fixes #9).
   Only a missing `CCORCH_WORK_DIR` or `CCORCH_PARENT_CHANNEL` exits with a message (status 2).
   `WORK_DIR` and `PROJECT_DIR` are made absolute before any `cd`. `CCORCH_TIMEOUT` is validated.
 - The pane id comes from `$TMUX_PANE`; an empty id or one not in `tmux list-panes` is refused.
-- The lock records its owner's PID. It is stale when the owner is dead, or has no owner file and
-  is over a minute old, and is removed by an atomic rename that re-checks the owner. It is
-  released only by its owner, and by `cleanup()`.
+- The lock records its owner's PID for the refusal message and is released by `cleanup()`.
 - A Main Brain's result is copied to `result.md` when it wrote none, so a refusal is visible
   to the `/ccor` skill. The skill's error table says so.
 - Dry runs write nothing in the live session: they print `out_dir: <temp dir>` and write the
@@ -69,6 +68,16 @@ mode ([DEC-006](docs/sdd/design/decisions/DEC-006.md), fixes #9).
 - More deny rules: `rm -Rf`, `rm -r --force`, `rm --recursive`, `git push` with `-f` in any
   position, `--delete` or a `:refspec`, `git branch -D`, and `git -C ... push` at depth 2 and 3.
   They are the common forms; DEC-006 lists the known gaps.
+
+### Review round 3
+
+- The lock is simpler: bounded wait (`CCORCH_LOCK_WAIT`, default 10), then refuse. Automatic
+  stale-lock recovery is removed. A lock left by a killed wrapper is removed by hand; the
+  refusal names the directory and the owner pid.
+- The parent is always signalled: `cleanup()` starts with `set +e`, guards every write and
+  sends the signal last, so a work directory that cannot be written no longer swallows it.
+  `refuse()`, the watchdog and the dry-run prompt dump guard their writes the same way.
+- A limit or timeout of more than 6 digits is refused.
 
 ## 0.5.0 — 2026-10-04
 

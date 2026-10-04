@@ -24,6 +24,8 @@
 #   CCORCH_MAX_PANES      — Maximum live ccorch panes, Main Brain included (default: 8)
 #   CCORCH_MAX_CHILDREN_D1 — Max children for Main Brain/DEPTH=1 (default: 3)
 #   CCORCH_MAX_CHILDREN_D2 — Max children for Child/DEPTH=2 (default: 2)
+#   CCORCH_LOCK_WAIT      — Seconds to wait for the start lock, then refuse (default: 10). A lock
+#                           left by a killed wrapper is removed by hand; the refusal names it.
 #   CCORCH_PARENT_PANE    — Parent's tmux pane ID (reserved for future layout use)
 #   CCORCH_PARENT_ID      — Parent's child ID; required at depth 2 and 3, unset at depth 1.
 #                           The depth must equal the parent's recorded depth + 1.
@@ -91,6 +93,7 @@ MAX_PANES="${CCORCH_MAX_PANES:-8}"
 MAX_CHILDREN_D1="${CCORCH_MAX_CHILDREN_D1:-3}"
 MAX_CHILDREN_D2="${CCORCH_MAX_CHILDREN_D2:-2}"
 PARENT_ID="${CCORCH_PARENT_ID:-}"
+LOCK_WAIT="${CCORCH_LOCK_WAIT:-10}"
 
 # Everything that ends up in a front-matter line is sanitized: one line, no double quotes,
 # no backslashes, bounded length. A value from the environment or the task must not be
@@ -120,7 +123,7 @@ PANE_ID_FILE="${WORK_DIR}/${CHILD_ID}.pane"
 PARENT_ID_FILE="${WORK_DIR}/${CHILD_ID}.parent"
 DEPTH_FILE="${WORK_DIR}/${CHILD_ID}.depth"
 LOCK_DIR="${WORK_DIR}/.lock.d"
-LOCK_HELD=""
+LOCK_HELD=0
 WATCHDOG_PID=""   # set only when the watchdog starts; never inherited from the environment
 # A Main Brain's result also goes to result.md, where the user's session reads it.
 COPY_RESULT=""
@@ -137,14 +140,13 @@ read_pid() { # read_pid <file> — prints the file's content if it is all digits
   esac
 }
 
-# release_lock removes the lock only if this process owns it.
+# release_lock: LOCK_HELD is cleared first, so a signal that arrives during the release
+# cannot release twice. Nothing else removes a lock, so no ownership check is needed.
 release_lock() {
-  if [ -n "$LOCK_HELD" ]; then
-    if [ "$(read_pid "${LOCK_DIR}/owner")" = "$$" ]; then
-      rm -f "${LOCK_DIR}/owner"
-      rmdir "$LOCK_DIR" 2>/dev/null || true
-    fi
-    LOCK_HELD=""
+  if [ "$LOCK_HELD" = 1 ]; then
+    LOCK_HELD=0
+    rm -f "${LOCK_DIR}/owner" 2>/dev/null || true
+    rmdir "$LOCK_DIR" 2>/dev/null || true
   fi
 }
 
@@ -153,8 +155,17 @@ release_lock() {
 # before every check that can fail. Bash keeps one EXIT trap: anything that must happen on
 # exit, such as releasing the lock, goes through cleanup(), never through a second trap.
 
+# cleanup() must reach the signal at its end whatever fails before it: set +e, and every
+# write is guarded. The signal itself is skipped only for a dry run, which must not touch
+# a live channel.
 cleanup() {
+  set +e
   release_lock
+
+  # Kill watchdog if still running
+  if [ -n "${WATCHDOG_PID:-}" ]; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+  fi
 
   # Write a result if none exists yet: dry-run for a dry run, error otherwise
   if [ ! -f "$RESULT_FILE" ]; then
@@ -164,7 +175,8 @@ cleanup() {
       fallback_title="Dry run"
       fallback_body="CCORCH_DRY_RUN was set; claude was not started."
     fi
-    cat > "${RESULT_FILE}.tmp" <<EOF
+    {
+      cat > "${RESULT_FILE}.tmp" <<EOF
 ---
 status: ${fallback_status}
 depth: ${DEPTH_FM}
@@ -176,24 +188,20 @@ completed: $(date -Iseconds)
 
 ${fallback_body}
 EOF
-    mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
+    } 2>/dev/null || true
+    mv "${RESULT_FILE}.tmp" "$RESULT_FILE" 2>/dev/null || true
   fi
 
   # The Main Brain's result reaches the user's session even when it ended without writing
   # result.md (refused, error, incomplete, timeout). WORK_DIR is new for each session, so
   # writing it when absent is enough.
   if [ -n "$COPY_RESULT" ] && [ ! -e "${OUT_DIR}/result.md" ] && [ -f "$RESULT_FILE" ]; then
-    cp "$RESULT_FILE" "${OUT_DIR}/result.md.tmp" && mv "${OUT_DIR}/result.md.tmp" "${OUT_DIR}/result.md" || true
+    { cp "$RESULT_FILE" "${OUT_DIR}/result.md.tmp" && mv "${OUT_DIR}/result.md.tmp" "${OUT_DIR}/result.md"; } 2>/dev/null || true
   fi
 
-  # Always signal parent (a dry run must not touch a live channel)
+  # Always signal parent, last (a dry run must not touch a live channel)
   if [ -z "$DRY_RUN" ]; then
     tmux wait-for -S "$PARENT_CHANNEL" 2>/dev/null || true
-  fi
-
-  # Kill watchdog if still running
-  if [ -n "${WATCHDOG_PID:-}" ]; then
-    kill "$WATCHDOG_PID" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -211,7 +219,8 @@ trap cleanup EXIT
 refuse() {
   local REASON_FM
   sanitize_to REASON_FM 200 "$1"
-  cat > "${RESULT_FILE}.tmp" <<EOF
+  {
+    cat > "${RESULT_FILE}.tmp" <<EOF
 ---
 status: refused
 depth: ${DEPTH_FM}
@@ -224,7 +233,8 @@ completed: $(date -Iseconds)
 
 ${REASON_FM}
 EOF
-  mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
+  } 2>/dev/null || true
+  mv "${RESULT_FILE}.tmp" "$RESULT_FILE" 2>/dev/null || true
   echo "ccorch: refused: ${REASON_FM}" >&2
   if [ -n "$DRY_RUN" ]; then
     echo "gate: refused: ${REASON_FM}"
@@ -254,13 +264,14 @@ fi
 # comparison below meaningless.
 require_positive_int() {
   case "$2" in
-    ''|*[!0-9]*|0*) refuse "$1 must be a positive integer (got '$2')" ;;
+    ''|*[!0-9]*|0*|???????*) refuse "$1 must be a positive integer (got '$2'; at most 6 digits)" ;;
   esac
 }
 require_positive_int CCORCH_TIMEOUT "$TIMEOUT"
 require_positive_int CCORCH_MAX_PANES "$MAX_PANES"
 require_positive_int CCORCH_MAX_CHILDREN_D1 "$MAX_CHILDREN_D1"
 require_positive_int CCORCH_MAX_CHILDREN_D2 "$MAX_CHILDREN_D2"
+require_positive_int CCORCH_LOCK_WAIT "$LOCK_WAIT"
 
 case "$DEPTH" in
   1|2|3) ;;
@@ -271,60 +282,35 @@ esac
 # until the records are written, so simultaneous starts cannot both pass. A dry run takes
 # no lock: it records nothing, so a race does not matter.
 #
-# The holder writes its PID to $LOCK_DIR/owner. A lock is stale when its owner is dead, or
-# when it has no (valid) owner file and is older than a minute (the holder died between
-# the mkdir and the write). A stale lock is removed by renaming it, which is atomic, so
-# only one waiter wins; the renamed lock's owner is then checked again, because between
-# the check and the rename another waiter may have replaced the lock with a live one, and
-# that one is put back. A bounded wait (10 s) ends in a refusal.
-# (-mmin takes whole minutes: BSD and bfs find reject a fractional value.)
+# Bounded wait, then refuse; there is no automatic recovery. A lock left by a killed
+# wrapper is removed by hand, and the refusal reason names it.
 acquire_lock() {
-  local tries=0 attempts=0 owner stale d after
-  while :; do
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-      LOCK_HELD=1
-      printf '%s\n' "$$" > "${LOCK_DIR}/owner" 2>/dev/null || true
-      return 0
-    fi
-    owner="$(read_pid "${LOCK_DIR}/owner")"
-    stale=""
-    if [ -n "$owner" ]; then
-      kill -0 "$owner" 2>/dev/null || stale=1
-    elif [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-      stale=1
-    fi
-    if [ -n "$stale" ]; then
-      attempts=$((attempts + 1))
-      if [ "$attempts" -gt 50 ]; then
-        return 2
-      fi
-      d="${LOCK_DIR}.stale.$$.${attempts}"
-      if mv "$LOCK_DIR" "$d" 2>/dev/null; then
-        after="$(read_pid "${d}/owner")"
-        if [ -n "$after" ] && [ "$after" != "$owner" ] && kill -0 "$after" 2>/dev/null; then
-          # We renamed a live lock that replaced the stale one: put it back.
-          mv "$d" "$LOCK_DIR" 2>/dev/null || return 2
-        else
-          rm -f "${d}/owner"
-          rmdir "$d" 2>/dev/null || true
-        fi
-      fi
-      continue
-    fi
+  local tries=0 max=$((LOCK_WAIT * 10))
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     tries=$((tries + 1))
-    if [ "$tries" -gt 100 ]; then
+    if [ "$tries" -ge "$max" ]; then
       return 1
     fi
     sleep 0.1
   done
+  LOCK_HELD=1
+  if ! printf '%s\n' "$$" > "${LOCK_DIR}/owner" 2>/dev/null; then
+    release_lock
+    return 2
+  fi
 }
 if [ -z "$DRY_RUN" ]; then
   lock_rc=0
   acquire_lock || lock_rc=$?
   case "$lock_rc" in
     0) ;;
-    2) refuse "lock contention: could not take ${LOCK_DIR}" ;;
-    *) refuse "lock timeout: could not take ${LOCK_DIR} within 10s" ;;
+    2) refuse "lock: cannot write owner in ${LOCK_DIR}" ;;
+    *)
+      lock_owner="$(read_pid "${LOCK_DIR}/owner")"
+      lock_note=""
+      [ -z "$lock_owner" ] || lock_note=" (owner pid ${lock_owner})"
+      refuse "lock timeout after ${LOCK_WAIT}s: ${LOCK_DIR}${lock_note}; if no ccorch pane is running, remove this directory and retry"
+      ;;
   esac
 fi
 
@@ -708,7 +694,7 @@ CLAUDE_CMD=(
 
 # Dry run: the gate has passed; show what would start, then stop.
 if [ -n "$DRY_RUN" ]; then
-  printf '%s' "$SYSTEM_PROMPT" > "${OUT_DIR}/${CHILD_ID}.dry-run.system-prompt"
+  printf '%s' "$SYSTEM_PROMPT" > "${OUT_DIR}/${CHILD_ID}.dry-run.system-prompt" 2>/dev/null || true
   echo "gate: ok"
   printf 'argv: %q\n' "${CLAUDE_CMD[@]}"
   exit 0
@@ -726,7 +712,8 @@ printf '%s' "$TASK" > "$TASK_FILE"
   sleep "$TIMEOUT"
   # Only act if no result file yet (task still running)
   if [ ! -f "$RESULT_FILE" ]; then
-    cat > "${RESULT_FILE}.tmp" <<EOF
+    {
+      cat > "${RESULT_FILE}.tmp" <<EOF
 ---
 status: timeout
 depth: ${DEPTH_FM}
@@ -738,7 +725,8 @@ completed: $(date -Iseconds)
 
 Task exceeded ${TIMEOUT}s timeout limit.
 EOF
-    mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
+    } 2>/dev/null || true
+    mv "${RESULT_FILE}.tmp" "$RESULT_FILE" 2>/dev/null || true
     # Kill the main process group
     kill 0 2>/dev/null || true
   fi
