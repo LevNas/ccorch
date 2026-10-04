@@ -26,7 +26,7 @@ ccorch is a tmux-based orchestration plugin for Claude Code. Running the `/ccor`
 | REQ-005 | tmux wait-for based signaling | US-003 | Defined |
 | REQ-006 | File-based data exchange via /tmp/ccorch/<session_id>/ | US-003 | Defined |
 | REQ-007 | Timeout to prevent infinite blocking | US-003 | Defined |
-| REQ-008 | Depth-based tool flags via --disallowedTools; panes in auto mode (see [NFR-SEC-001](nfr/security.md#nfr-sec-001-tool-restriction-enforcement) and [NFR-SEC-003](nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention)) | US-004 | Verified (0.6.0; live check 2026-10-04, see [DEC-006](../design/decisions/DEC-006.md) and #11) |
+| REQ-008 | Depth-based tool flags via --disallowedTools; panes in auto mode (see [NFR-SEC-001](nfr/security.md#nfr-sec-001-tool-restriction-enforcement) and [NFR-SEC-003](nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention)) | US-004 | Verified (0.6.0; live check 2026-10-04, see [DEC-006](../design/decisions/DEC-006.md) and #11); auto mode verified live, no denied command run live |
 | REQ-009 | Guard rails via --append-system-prompt | US-004 | Defined |
 | REQ-010 | ccmemo record-knowledge / plan-task integration | US-005 | Defined |
 | REQ-011 | Standalone operation without ccmemo | US-005 | Defined |

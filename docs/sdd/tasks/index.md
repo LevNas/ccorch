@@ -50,7 +50,7 @@ All implementation details have been defined in the design phase.
 | Task ID | Title | Status | Depends | Est. | Details |
 |---------|-------|--------|---------|------|---------|
 | TASK-006 | Marketplace registration | DONE | Phase 2 | 5min | [Details](phase-3/TASK-006.md) @phase-3/TASK-006.md |
-| TASK-007 | Integration smoke test | BLOCKED | TASK-006 | 5min | [Details](phase-3/TASK-007.md) @phase-3/TASK-007.md |
+| TASK-007 | Integration smoke test | IN PROGRESS | TASK-006 | 5min | [Details](phase-3/TASK-007.md) @phase-3/TASK-007.md |
 
 ---
 
@@ -58,7 +58,7 @@ All implementation details have been defined in the design phase.
 
 | Risk | Impact | Probability | Mitigation |
 |------|--------|-------------|------------|
-| `--disallowedTools` Bash pattern syntax or auto-mode behaviour changes in future Claude Code versions | Medium | Low | Pin to documented syntax; `tests/test_wrapper.sh` checks the arguments, and the live check is manual |
+| `--disallowedTools` Bash pattern syntax or auto-mode behaviour changes in future Claude Code versions | Medium | Low | Pin to documented syntax; `tests/test_wrapper.sh` checks the arguments; the live check is manual (last run 2026-10-04 on 0.6.0, #11) and should be repeated after a Claude Code upgrade |
 | tmux wait-for channel name collision across concurrent sessions | Low | Low | Session ID includes timestamp |
 | Wrapper script quoting issues with complex task descriptions | Medium | Medium | Test with special characters, use heredoc |
 

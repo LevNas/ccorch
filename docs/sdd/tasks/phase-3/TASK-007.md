@@ -1,7 +1,8 @@
 # TASK-007: Integration Smoke Test
 
 ## Status
-TODO
+IN PROGRESS. The 0.6.0 live check on 2026-10-04 (issue #11) covered steps 1 and 3 and the
+limit refusals of DEC-006. Steps 2, 4 and 5 have not been run live, and 0.6.1 has not had a live check.
 
 ## Description
 Verify that the complete flow works end-to-end: plugin installation, skill invocation, pane creation, task execution, and result retrieval.
@@ -40,9 +41,9 @@ Verify that the complete flow works end-to-end: plugin installation, skill invoc
    - Verify no files leaked into the repository
 
 ## Acceptance Criteria
-- [ ] Plugin installs successfully from marketplace
+- [x] Plugin installs successfully from marketplace (0.6.0, 2026-10-04)
 - [ ] Precondition checks work correctly
-- [ ] Basic orchestration completes with result.md
+- [x] Basic orchestration completes with result.md (0.6.0, 2026-10-04; `result.md` was written when the Main Brain's pane exited)
 - [ ] Depth limit is enforced
 - [ ] Timeout mechanism works
 
