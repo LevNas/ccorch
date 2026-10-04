@@ -6,8 +6,8 @@
 #
 # The wrapper sets the hook before claude starts and removes it in its cleanup, so this runs
 # only when that cleanup did not. It writes a "status: error" result unless the pane left a
-# result, and for the Main Brain (copy_result=1) copies it to <work_dir>/result.md when that
-# does not exist yet. The hook signals the parent after this script returns, so the parent
+# result, and for the Main Brain (copy_result=1) copies the result to <work_dir>/result.md
+# when that is absent or differs. The hook signals the parent after this script returns, so the parent
 # finds a result file and does not wait again.
 
 set -u
@@ -47,9 +47,15 @@ else
   rm -f "$tmp" 2>/dev/null
 fi
 
-if [ "$COPY_RESULT" = 1 ] && [ -s "$RESULT_FILE" ] && [ ! -e "${WORK_DIR}/result.md" ]; then
+# The same rule as the wrapper's cleanup() for a wrapper that ran claude (the hook is set only
+# after claude starts): copy when result.md is absent or differs, so a result rewritten after
+# the last Stop is not hidden by an older copy. If the copy fails, an older result.md is
+# removed rather than read as this result.
+if [ "$COPY_RESULT" = 1 ] && [ -s "$RESULT_FILE" ] \
+   && ! cmp -s "$RESULT_FILE" "${WORK_DIR}/result.md" 2>/dev/null; then
   copy_tmp="${WORK_DIR}/result.md.pane-died-$$.tmp"
-  { cp "$RESULT_FILE" "$copy_tmp" && mv "$copy_tmp" "${WORK_DIR}/result.md"; } 2>/dev/null \
-    || rm -f "$copy_tmp" 2>/dev/null
+  if ! { cp "$RESULT_FILE" "$copy_tmp" && mv "$copy_tmp" "${WORK_DIR}/result.md"; } 2>/dev/null; then
+    rm -f "$copy_tmp" "${WORK_DIR}/result.md" 2>/dev/null
+  fi
 fi
 exit 0

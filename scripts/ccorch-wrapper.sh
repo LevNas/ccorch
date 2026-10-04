@@ -745,16 +745,17 @@ fi
 # normal exit still signals once, from the trap. kill-pane runs no hook, but the wrapper
 # then gets SIGHUP and the trap signals.
 # The values go into a tmux command string, so each must be plain: otherwise no hook, and
-# the wrapper behaves as before 0.6.3.
+# the wrapper behaves as before 0.6.3. A channel cannot start with "-" (tmux would read it as
+# a flag), a pane id is % and digits, and paths are absolute.
 PANE_HOOK_ARMED=""
-plain_value() { # plain_value <value> <allowed character class>
-  [ -n "$1" ] && [[ "$1" =~ ^[$2]+$ ]]
+plain_value() { # plain_value <value> <regex for the whole value>
+  [[ "$1" =~ ^$2$ ]]
 }
-if plain_value "$PARENT_CHANNEL" 'A-Za-z0-9_-' \
-   && plain_value "$CURRENT_PANE" '%0-9' \
-   && plain_value "$SCRIPT_DIR" 'A-Za-z0-9_./-' \
-   && plain_value "$RESULT_FILE" 'A-Za-z0-9_./-' \
-   && plain_value "$OUT_DIR" 'A-Za-z0-9_./-'; then
+if plain_value "$PARENT_CHANNEL" '[A-Za-z0-9_][A-Za-z0-9_-]*' \
+   && plain_value "$CURRENT_PANE" '%[0-9]+' \
+   && plain_value "$SCRIPT_DIR" '/[A-Za-z0-9_./-]*' \
+   && plain_value "$RESULT_FILE" '/[A-Za-z0-9_./-]*' \
+   && plain_value "$OUT_DIR" '/[A-Za-z0-9_./-]*'; then
   PANE_DIED_CMD="run-shell 'bash ${SCRIPT_DIR}/ccorch-pane-died.sh ${RESULT_FILE} ${OUT_DIR} ${COPY_RESULT:-0} ${DEPTH_LABEL}' ; wait-for -S ${PARENT_CHANNEL} ; kill-pane -t ${CURRENT_PANE}"
   if tmux set-option -p -t "$CURRENT_PANE" remain-on-exit on 2>/dev/null; then
     if tmux set-hook -p -t "$CURRENT_PANE" pane-died "$PANE_DIED_CMD" 2>/dev/null; then

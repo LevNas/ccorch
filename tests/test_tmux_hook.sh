@@ -76,25 +76,41 @@ pane_listed() { "${TM[@]}" list-panes -a -F '#{pane_id}' | grep -qxF -- "$PANE";
 result_file() { ls "$W"/depth1-*.md 2>/dev/null | head -1; }
 
 # --- SIGKILL of the wrapper alone: tmux writes the result, signals, closes the pane ---
+# Under each shell tmux may start the pane with: the hook sees the wrapper's death only if
+# that shell execs the wrapper (the pane's program is then the wrapper itself).
 
-start_pane killed
-if ! wait_started; then
-  # Stop here rather than kill something else: the fake claude did not start.
-  fail "SIGKILL: the fake claude started (aborting)"
-  echo; echo "${PASS} passed, ${FAIL} failed"; exit 1
+kill_case() { # kill_case <label> <shell>
+  local label="$1" shell="$2" PID
+  "${TM[@]}" set-option -g default-shell "$shell"
+  start_pane "killed-${label}"
+  if ! wait_started; then
+    # Stop here rather than kill something else: the fake claude did not start.
+    fail "SIGKILL (${label}): the fake claude started (aborting)"
+    echo; echo "${PASS} passed, ${FAIL} failed"; exit 1
+  fi
+  ok "SIGKILL (${label}): the fake claude started"
+  PID=$("${TM[@]}" display-message -p -t "$PANE" '#{pane_pid}')
+  if ! ps -o args= -p "$PID" | grep -qF ccorch-wrapper.sh; then
+    fail "SIGKILL (${label}): the pane's program is the wrapper (${shell} did not exec it)"
+    return
+  fi
+  ok "SIGKILL (${label}): the pane's program is the wrapper (${shell} exec'd it)"
+  kill -9 "$PID"
+  expect "SIGKILL (${label}): the parent channel is signalled" timeout 10 "${TM[@]}" wait-for "$CH"
+  expect "SIGKILL (${label}): the result file says status: error" grep -qxF 'status: error' "$(result_file)"
+  expect "SIGKILL (${label}): result.md holds it (Main Brain)" grep -qxF 'status: error' "${W}/result.md"
+  sleep 0.5
+  if pane_listed; then fail "SIGKILL (${label}): the pane is closed (still listed)"; else ok "SIGKILL (${label}): the pane is closed"; fi
+  sleep 0.5
+  if pgrep -f "sleep ${MARK}" >/dev/null; then fail "SIGKILL (${label}): the orphaned claude is gone"; else ok "SIGKILL (${label}): the orphaned claude is gone"; fi
+}
+
+USER_SHELL="${SHELL:-/bin/sh}"
+kill_case user "$USER_SHELL"
+if [ -x /bin/sh ] && [ "$(readlink -f /bin/sh)" != "$(readlink -f "$USER_SHELL")" ]; then
+  kill_case sh /bin/sh
 fi
-ok "SIGKILL: the fake claude started"
-PID=$("${TM[@]}" display-message -p -t "$PANE" '#{pane_pid}')
-expect "SIGKILL: the pane's program is the wrapper (the shell exec'd it)" \
-  bash -c 'ps -o args= -p "$1" | grep -qF ccorch-wrapper.sh' _ "$PID"
-kill -9 "$PID"
-expect "SIGKILL: the parent channel is signalled" timeout 10 "${TM[@]}" wait-for "$CH"
-expect "SIGKILL: the result file says status: error" grep -qxF 'status: error' "$(result_file)"
-expect "SIGKILL: result.md holds it (Main Brain)" grep -qxF 'status: error' "${W}/result.md"
-sleep 0.5
-if pane_listed; then fail "SIGKILL: the pane is closed (still listed)"; else ok "SIGKILL: the pane is closed (not listed)"; fi
-sleep 0.5
-if pgrep -f "sleep ${MARK}" >/dev/null; then fail "SIGKILL: the orphaned claude is gone"; else ok "SIGKILL: the orphaned claude is gone"; fi
+"${TM[@]}" set-option -g default-shell "$USER_SHELL"
 
 # --- Normal exit: one signal (the trap's), no hook, no dead pane left behind ---
 

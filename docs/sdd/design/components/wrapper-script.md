@@ -87,8 +87,9 @@ for ever). Before `claude` starts, outside a dry run, the wrapper now sets on it
   <work dir> <copy_result> <depth>' ; wait-for -S <parent channel> ; kill-pane -t <pane>`.
 
 `scripts/ccorch-pane-died.sh` writes `status: error` unless the pane left a result (through
-`publish_if_absent`, below) and, for the Main Brain, copies it to `result.md` when that does
-not exist. `run-shell` without `-b` finishes before the next command, so the parent is
+`publish_if_absent`, below) and, for the Main Brain, copies the result to `result.md` when that
+is absent or differs (the rule `cleanup()` uses after `claude` ran), removing an older
+`result.md` if the copy fails. `run-shell` without `-b` finishes before the next command, so the parent is
 signalled after the result is in place; the parent's wait loop then finds a result and
 stops. The judgment "the pane is gone and left no result" is the same every time, so a script
 makes it, not the parents' prompts.
@@ -99,14 +100,20 @@ makes it, not the parents' prompts.
   option is unset first and the hook only if that worked: remain-on-exit left on without the
   hook would keep a dead pane in the user's tmux, while a hook left with the option off
   never runs. If the option stays, the hook closes the pane and signals once more.
-- The channel, pane id and paths go into a tmux command string, so each must be plain
-  (`[A-Za-z0-9_-]`, `[%0-9]`, `[A-Za-z0-9_./-]`); otherwise no hook is set and the wrapper
-  behaves as before 0.6.3. If the hook cannot be set, the option is taken back at once.
+- The channel, pane id and paths go into a tmux command string, so each must be plain: a
+  channel of `[A-Za-z0-9_-]` not starting with `-`, a pane id of `%` and digits, absolute
+  paths of `[A-Za-z0-9_./-]`. Otherwise no hook is set and the wrapper behaves as before
+  0.6.3. If the hook cannot be set, the option is taken back at once.
+- The wrapper sets the pane-level `remain-on-exit` and `pane-died` and later unsets them. A
+  pane-level value the user had set on that pane is lost, and while the wrapper runs the
+  pane-level `on` hides a window-level setting such as `failed`.
 - The pane's program must be the wrapper's `bash` itself: the parent starts it with
   `tmux split-pane "ENV=... bash ccorch-wrapper.sh '<task>'"`, and the shell tmux starts
-  execs a simple command. `tests/test_tmux_hook.sh` checks this.
-- Needs tmux 3.0 or later (pane options and hooks). Checked on tmux 3.7b, with a private tmux
-  server and a fake `claude` (`tests/test_tmux_hook.sh`); not with a real Claude pane.
+  (`default-shell`) must exec that simple command. `tests/test_tmux_hook.sh` checks this
+  under the user's shell and `/bin/sh` (here zsh, and bash as `/bin/sh`); other shells are
+  not checked.
+- Checked only on tmux 3.7b, with a private tmux server and a fake `claude`
+  (`tests/test_tmux_hook.sh`); not with a real Claude pane, and not on older tmux.
 - Not covered: a SIGKILL before the hook is set (during the gate), and `kill-pane`, which runs
   no hook but makes the trap signal.
 
@@ -120,10 +127,11 @@ to `result.md`) use the `write-to-tmp → mv` pattern:
 The two writes that can race with a pane still running, the watchdog's `status: timeout` and
 `ccorch-pane-died.sh`'s `status: error`, go through `publish_if_absent` in
 `scripts/ccorch-lib.sh` instead: `ln tmp target` fails atomically when the pane's result
-exists, so it is never overwritten and there is no gap between the check and the write
-(before 0.6.3 the watchdog tested `-s` and then `mv`ed over the file). An empty target counts
-as no result but may be a write in progress: it is replaced only if still empty after
-`CCORCH_PUBLISH_GRACE` seconds (default 5).
+exists, so a non-empty result is never overwritten (before 0.6.3 the watchdog tested `-s` and
+then `mv`ed over the file). Without hard links (`ln` fails and the target does not exist) it
+falls back to `mv -n`. An empty target counts as no result but may be a write in progress: it
+is replaced only if still empty after `CCORCH_PUBLISH_GRACE` seconds (default 5). That
+replacement is a check and then a `mv`, so a write in the instant between them is lost.
 
 The panes do not. Their prompt tells them to write the result file and `status.md` with the
 Write tool (or Edit), never with `mv` or shell redirection: a user's ask rule on those commands

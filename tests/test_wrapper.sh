@@ -81,6 +81,14 @@ if [ -n "${FAKE_CLAUDE_SLEEP:-}" ]; then
 fi
 exit "${FAKE_CLAUDE_RC:-0}"
 EOF
+# ln fails when FAKE_LN_FAIL is set (a filesystem without hard links).
+REAL_LN="$(command -v ln)"
+cat > "${FAKE_BIN}/ln" <<EOF
+#!/usr/bin/env bash
+[ -n "\${FAKE_LN_FAIL:-}" ] && exit 1
+exec "${REAL_LN}" "\$@"
+EOF
+chmod +x "${FAKE_BIN}/ln"
 # cp fails for a copy to result.md (its temporary name) when FAKE_CP_FAIL is set.
 REAL_CP="$(command -v cp)"
 cat > "${FAKE_BIN}/cp" <<EOF
@@ -147,7 +155,7 @@ new_case() {
   export FAKE_LIST_DELAY=0
   unset FAKE_LIST_KILL FAKE_PANE_ID FAKE_CLAUDE_WRITE FAKE_CLAUDE_EMPTY FAKE_CLAUDE_SLEEP \
     FAKE_CLAUDE_LATE_WRITE FAKE_CLAUDE_LATE_DELAY \
-    FAKE_TMUX_FAIL_ON FAKE_CP_FAIL CCORCH_PUBLISH_GRACE
+    FAKE_TMUX_FAIL_ON FAKE_CP_FAIL FAKE_LN_FAIL CCORCH_PUBLISH_GRACE
   : > "$FAKE_PANES_FILE"
   : > "$FAKE_TMUX_LOG"
   live %99   # the fake current pane must be alive: the gate refuses otherwise
@@ -876,6 +884,16 @@ CCORCH_PUBLISH_GRACE=2 publish 'timeout'; wait
 expect "publish over an empty file filled during the grace: returns 1" test "$PUB_RC" = 1
 expect "publish over an empty file filled during the grace: the pane's result stays" file_is "${CASE_DIR}/target" 'pane result'
 
+# Without hard links, an absent target is still published, and a result is still kept.
+new_case; FAKE_LN_FAIL=1 publish 'timeout'
+expect "publish, ln unavailable, no result: returns 0" test "$PUB_RC" = 0
+expect "publish, ln unavailable, no result: the target holds it" file_is "${CASE_DIR}/target" 'timeout'
+
+new_case; printf 'pane result\n' > "${CASE_DIR}/target"; FAKE_LN_FAIL=1 publish 'timeout'
+expect "publish, ln unavailable, over a result: returns 1" test "$PUB_RC" = 1
+expect "publish, ln unavailable, over a result: untouched" file_is "${CASE_DIR}/target" 'pane result'
+expect "publish, ln unavailable, over a result: the temporary file is removed" test ! -e "${CASE_DIR}/tmp"
+
 # --- Watchdog ---
 
 new_case; run_real 1 CCORCH_TIMEOUT=1 FAKE_CLAUDE_SLEEP=5
@@ -936,6 +954,12 @@ new_case; run_real 1 'CCORCH_PARENT_CHANNEL=bad;channel'
 expect "hook: a channel that is not plain sets none" tmux_not_logged 'remain-on-exit'
 expect "hook: a channel that is not plain still starts claude" claude_started
 
+new_case; run_real 1 'CCORCH_PARENT_CHANNEL=-x'
+expect "hook: a channel starting with - sets none" tmux_not_logged 'remain-on-exit'
+
+new_case; live 123; run_real 1 FAKE_PANE_ID=123 TMUX_PANE=123
+expect "hook: a pane id without % sets none" tmux_not_logged 'remain-on-exit'
+
 # If remain-on-exit cannot be unset, the hook stays so that it can still close the pane.
 new_case; run_real 1 FAKE_TMUX_FAIL_ON='set-option -u'
 expect "hook: option unset fails, the hook is left in place" tmux_not_logged 'set-hook -u -p'
@@ -961,8 +985,13 @@ new_case; printf 'pane result\n' > "${WORK_DIR}/p.md"; pane_died 1 1
 expect "pane-died, result present: untouched" file_is "${WORK_DIR}/p.md" 'pane result'
 expect "pane-died, result present, Main Brain: copied to result.md" file_is "${WORK_DIR}/result.md" 'pane result'
 
-new_case; printf 'earlier\n' > "${WORK_DIR}/result.md"; pane_died 1 1
-expect "pane-died: an existing result.md is not replaced" file_is "${WORK_DIR}/result.md" 'earlier'
+# A result rewritten after the last Stop: an older result.md must not hide it.
+new_case; printf 'earlier\n' > "${WORK_DIR}/result.md"; printf 'rewritten\n' > "${WORK_DIR}/p.md"; pane_died 1 1
+expect "pane-died: an older, differing result.md is replaced" file_is "${WORK_DIR}/result.md" 'rewritten'
+
+new_case; printf 'earlier\n' > "${WORK_DIR}/result.md"; printf 'rewritten\n' > "${WORK_DIR}/p.md"
+FAKE_CP_FAIL=1 pane_died 1 1
+expect "pane-died, copy fails: the older result.md is removed" test ! -e "${WORK_DIR}/result.md"
 
 new_case; pane_died 0 2
 expect "pane-died, child: status: error" grep -qxF 'status: error' "${WORK_DIR}/p.md"
