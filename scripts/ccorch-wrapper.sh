@@ -125,6 +125,7 @@ DEPTH_FILE="${WORK_DIR}/${CHILD_ID}.depth"
 LOCK_DIR="${WORK_DIR}/.lock.d"
 LOCK_HELD=0
 WATCHDOG_PID=""   # set only when the watchdog starts; never inherited from the environment
+CLAUDE_STARTED="" # set just before claude starts; a refused wrapper never sets it
 # A Main Brain's result also goes to result.md, where the user's session reads it.
 COPY_RESULT=""
 if [ "$DEPTH" = "1" ] && [ -z "$PARENT_ID" ]; then
@@ -194,10 +195,14 @@ EOF
 
   # The Main Brain's result reaches the user's session even when it ended without writing
   # result.md (refused, error, incomplete, timeout). The Stop hook also copies it on each
-  # Stop once it exists; copy here when result.md is absent or differs from the result
-  # file (by content, not mtime, so a rewrite within the same second is not missed). The
-  # temporary name is per process, so a hook copying at the same moment cannot interleave.
-  if [ -n "$COPY_RESULT" ] && [ -s "$RESULT_FILE" ] && ! cmp -s "$RESULT_FILE" "${OUT_DIR}/result.md"; then
+  # Stop once it exists; copy here when result.md is absent, or when this wrapper ran
+  # claude and result.md differs from the result file (by content, not mtime, so a rewrite
+  # within the same second is not missed). A wrapper refused before claude started never
+  # replaces an existing result.md: it may belong to another Main Brain in this session.
+  # The temporary name is per process, so a hook copying at the same moment cannot interleave.
+  if [ -n "$COPY_RESULT" ] && [ -s "$RESULT_FILE" ] \
+     && { [ ! -e "${OUT_DIR}/result.md" ] \
+          || { [ -n "$CLAUDE_STARTED" ] && ! cmp -s "$RESULT_FILE" "${OUT_DIR}/result.md"; }; }; then
     local copy_tmp="${OUT_DIR}/result.md.wrapper-$$.tmp"
     { cp "$RESULT_FILE" "$copy_tmp" && mv "$copy_tmp" "${OUT_DIR}/result.md"; } 2>/dev/null \
       || rm -f "$copy_tmp" 2>/dev/null
@@ -749,6 +754,7 @@ WATCHDOG_PID=$!
 SENDER_PID=$!
 
 # Launch Claude interactively (blocks until Claude exits)
+CLAUDE_STARTED=1
 CLAUDE_RC=0
 "${CLAUDE_CMD[@]}" || CLAUDE_RC=$?
 

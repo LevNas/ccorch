@@ -531,6 +531,21 @@ expect "result rewritten after the hook's copy: result.md holds the final result
   file_is "${WORK_DIR}/result.md" 'final result'
 expect "wrapper's copy leaves no temporary file" no_files "${WORK_DIR}"/result.md.*.tmp
 
+# A Main Brain refused before claude starts never replaces an existing result.md: it may be
+# the real result of another Main Brain in this session.
+new_case; printf 'real result\n' > "${WORK_DIR}/result.md"; touch "$FAKE_LIST_FAIL"
+run_real 1
+expect "refused at list-panes with result.md present: refused" refused_with "tmux list-panes failed"
+expect "refused at list-panes with result.md present: result.md untouched" file_is "${WORK_DIR}/result.md" 'real result'
+
+new_case; printf 'real result\n' > "${WORK_DIR}/result.md"
+sleep 60 & LOCK_OWNER=$!
+mkdir "${WORK_DIR}/.lock.d"; printf '%s\n' "$LOCK_OWNER" > "${WORK_DIR}/.lock.d/owner"
+run_real 1 CCORCH_LOCK_WAIT=1
+kill "$LOCK_OWNER" 2>/dev/null; wait "$LOCK_OWNER" 2>/dev/null
+expect "refused at the lock with result.md present: refused" refused_with "lock timeout"
+expect "refused at the lock with result.md present: result.md untouched" file_is "${WORK_DIR}/result.md" 'real result'
+
 # An empty result file counts as no result: the wrapper writes its own, and result.md gets it.
 new_case; run_real 1 FAKE_CLAUDE_EMPTY=1
 expect "empty result file: the wrapper writes status: incomplete" result_has 'status: incomplete'

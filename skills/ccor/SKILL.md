@@ -203,7 +203,8 @@ user that a pane waiting on a blocked action is a likely reason.
 |----------|----------|
 | Not in tmux | Error message, no action |
 | Already orchestrating | Error message, no action |
-| Main Brain refused, error, incomplete or timeout | The wrapper writes the Main Brain's result file and copies it to result.md when the Main Brain wrote none; report its `status:` and reason (a refusal has `status: refused` and a reason) |
+| Main Brain waiting for a human (a permission prompt, a question) | No signal arrives until it writes its result or `CCORCH_TIMEOUT` runs out. If the user asks, or the wait is long, tell them to look at the Main Brain's pane |
+| Main Brain refused, error, incomplete or timeout | The wrapper writes the Main Brain's result file when the Main Brain wrote none, and copies it to result.md; report its `status:` and reason (a refusal has `status: refused` and a reason) |
 | Main Brain crash | Error result written by trap, signal still sent |
 | Child/Grandchild failure | Partial results aggregated by Main Brain |
 | Child over a pane or children limit | `status: refused` with the reason in its result file |
