@@ -4,7 +4,7 @@
 IN PROGRESS. The 0.6.0 live check on 2026-10-04 (issue #11) covered part of step 3 and the limit
 refusals of DEC-006. The plugin was updated from 0.5.0 to 0.6.0 from the marketplace with
 `claude plugin update ccorch@levnas-plugins`; a fresh `/plugin install` (step 1) was not run.
-Steps 2, 4 and 5 have not been run live, and 0.6.1 has not had a live check.
+Steps 2, 4, 5 and 6 have not been run live, and 0.6.1 has not had a live check.
 
 ## Description
 Verify that the complete flow works end-to-end: plugin installation, skill invocation, pane creation, task execution, and result retrieval.
