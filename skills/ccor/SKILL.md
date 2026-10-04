@@ -82,20 +82,35 @@ Where `${TASK}` is the user's task description passed to `/ccor`.
 **Important**: The Main Brain's system prompt (injected by the wrapper script) instructs it to:
 - Analyze the task and decompose into subtasks
 - Create child panes for independent subtasks
-- Wait for children to complete
-- Aggregate results into `${WORK_DIR}/result.md`
-- Signal completion via `tmux wait-for -S ${CHANNEL}`
+- Wait for children to complete, then close their panes (not its own)
+- Write its result file once, at the end, with the Write tool
+
+The ccorch Stop hook does the rest. At the end of the first turn in which the Main Brain's
+result file exists, it copies that file to `${WORK_DIR}/result.md` and signals `${CHANNEL}`.
+Turns that end before the result file exists send no signal. (Children and grandchildren
+signal their parent at every turn instead; the parent checks for their result file and
+waits again.) The Main Brain's session stays
+open after that; the wrapper finishes when the pane is closed or `CCORCH_TIMEOUT` runs out,
+and then copies the result again if it was rewritten.
 
 ### 5. Background Completion Wait
 
-Use `run_in_background: true` to wait for the Main Brain's completion signal without blocking the user's session:
+Use `run_in_background: true` to wait for the Main Brain's completion signal without blocking the user's session.
+Wait again until `result.md` exists, so an early signal (from a pane started by an older wrapper or hook) is not read as the result.
+Shell variables do not carry over between Bash calls, so set the two values in the same command, with the literal session ID from step 2:
 
 ```bash
 # Run in background — user continues working
-tmux wait-for "$CHANNEL"
+WORK_DIR=/tmp/ccorch/<session_id>; CHANNEL=CCORCH_DONE_<session_id>
+until [ -f "${WORK_DIR}/result.md" ]; do
+  tmux wait-for "$CHANNEL" || { echo "tmux wait-for failed; see ${WORK_DIR}" >&2; exit 1; }
+done
 ```
 
-After the signal is received, read and present the results:
+A signal sent before the wait starts is not lost: tmux keeps it for the next `wait-for` on the channel.
+If `tmux wait-for` fails (the tmux server is gone, or the channel name is empty), the loop stops instead of spinning; check `${WORK_DIR}` by hand.
+
+After `result.md` exists, read and present the results:
 
 ```bash
 cat "${WORK_DIR}/result.md"
@@ -113,15 +128,18 @@ Read `${WORK_DIR}/status.md` (dashboard) and `${WORK_DIR}/result.md` and present
 
 After presenting results, ask the user: "Completed panes are still open. Close them?"
 
-If approved, close all completed panes:
+If approved, close all completed panes, the Main Brain's included. Closing the Main Brain's
+pane ends its session; the wrapper then finishes and leaves its records:
 
 ```bash
 for pane_file in ${WORK_DIR}/*.pane; do
   pane_id=$(cat "$pane_file")
   tmux kill-pane -t "$pane_id" 2>/dev/null || true
 done
-rm -f ${WORK_DIR}/*.pane
 ```
+
+Leave the `.pane` files in place: the wrapper ignores dead panes, and deleting them would
+need `rm`, which a user's ask rule may stop for approval.
 
 Note: The Main Brain also performs pane cleanup for its children during orchestration.
 This step handles any remaining panes (e.g., the Main Brain's own window).
@@ -185,7 +203,8 @@ user that a pane waiting on a blocked action is a likely reason.
 |----------|----------|
 | Not in tmux | Error message, no action |
 | Already orchestrating | Error message, no action |
-| Main Brain refused, error, incomplete or timeout | The wrapper writes the Main Brain's result file and copies it to result.md when the Main Brain wrote none; report its `status:` and reason (a refusal has `status: refused` and a reason) |
+| Main Brain waiting for a human (a permission prompt, a question) | No signal arrives until it writes its result or `CCORCH_TIMEOUT` runs out. If the user asks, or the wait is long, tell them to look at the Main Brain's pane |
+| Main Brain refused, error, incomplete or timeout | The wrapper writes the Main Brain's result file when the Main Brain wrote none, and copies it to result.md; report its `status:` and reason (a refusal has `status: refused` and a reason) |
 | Main Brain crash | Error result written by trap, signal still sent |
 | Child/Grandchild failure | Partial results aggregated by Main Brain |
 | Child over a pane or children limit | `status: refused` with the reason in its result file |

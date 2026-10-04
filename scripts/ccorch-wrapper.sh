@@ -125,6 +125,7 @@ DEPTH_FILE="${WORK_DIR}/${CHILD_ID}.depth"
 LOCK_DIR="${WORK_DIR}/.lock.d"
 LOCK_HELD=0
 WATCHDOG_PID=""   # set only when the watchdog starts; never inherited from the environment
+CLAUDE_STARTED="" # set just before claude starts; a refused wrapper never sets it
 # A Main Brain's result also goes to result.md, where the user's session reads it.
 COPY_RESULT=""
 if [ "$DEPTH" = "1" ] && [ -z "$PARENT_ID" ]; then
@@ -168,7 +169,7 @@ cleanup() {
   fi
 
   # Write a result if none exists yet: dry-run for a dry run, error otherwise
-  if [ ! -f "$RESULT_FILE" ]; then
+  if [ ! -s "$RESULT_FILE" ]; then
     local fallback_status="error" fallback_title="Error" fallback_body="Process terminated unexpectedly."
     if [ -n "$DRY_RUN" ]; then
       fallback_status="dry-run"
@@ -193,10 +194,18 @@ EOF
   fi
 
   # The Main Brain's result reaches the user's session even when it ended without writing
-  # result.md (refused, error, incomplete, timeout). WORK_DIR is new for each session, so
-  # writing it when absent is enough.
-  if [ -n "$COPY_RESULT" ] && [ ! -e "${OUT_DIR}/result.md" ] && [ -f "$RESULT_FILE" ]; then
-    { cp "$RESULT_FILE" "${OUT_DIR}/result.md.tmp" && mv "${OUT_DIR}/result.md.tmp" "${OUT_DIR}/result.md"; } 2>/dev/null || true
+  # result.md (refused, error, incomplete, timeout). The Stop hook also copies it on each
+  # Stop once it exists; copy here when result.md is absent, or when this wrapper ran
+  # claude and result.md differs from the result file (by content, not mtime, so a rewrite
+  # within the same second is not missed). A wrapper refused before claude started never
+  # replaces an existing result.md: it may belong to another Main Brain in this session.
+  # The temporary name is per process, so a hook copying at the same moment cannot interleave.
+  if [ -n "$COPY_RESULT" ] && [ -s "$RESULT_FILE" ] \
+     && { [ ! -e "${OUT_DIR}/result.md" ] \
+          || { [ -n "$CLAUDE_STARTED" ] && ! cmp -s "$RESULT_FILE" "${OUT_DIR}/result.md"; }; }; then
+    local copy_tmp="${OUT_DIR}/result.md.wrapper-$$.tmp"
+    { cp "$RESULT_FILE" "$copy_tmp" && mv "$copy_tmp" "${OUT_DIR}/result.md"; } 2>/dev/null \
+      || rm -f "$copy_tmp" 2>/dev/null
   fi
 
   # Always signal parent, last (a dry run must not touch a live channel)
@@ -482,13 +491,14 @@ SYSTEM_PROMPT="You are a CCORCH worker at DEPTH=${DEPTH}.
 - Timeout: ${TIMEOUT}s
 
 ## Rules
-- Write your results to ${RESULT_FILE} when done
+- Write your results to ${RESULT_FILE} when done, once, at the end. Your parent reads that file as your final answer as soon as it exists, so do not write a provisional or in-progress result there
+- Write ${RESULT_FILE} (and, if you are the Main Brain, the status dashboard) with the Write tool (or Edit), not with \`mv\` or shell redirection. A user's ask rule on such commands overrides auto mode and stops this pane until a human answers
 - No destructive git operations (push --force, reset --hard, branch -D)
 - No destructive filesystem operations (rm -rf)
 - Do not modify files outside the current working directory unless explicitly required by the task
 
 ## Permissions
-- This pane runs in auto mode. An action the auto-mode classifier blocks may need a human to approve it in this pane; if you are blocked, say so in your result file instead of retrying another way round
+- This pane runs in auto mode. An action the auto-mode classifier blocks may need a human to approve it in this pane; if you are blocked, say so in your result file instead of retrying another way round. Until that file exists your parent cannot tell a blocked pane from a busy one
 - The common forms of some commands are denied by rule at this depth. The rules catch the usual command form only, so they are not a complete block. Do not work around a denial by another route (such as \`sh -c\` or a full path): that is a rule you must follow, not something the rules enforce"
 
 if [ "$DEPTH" -eq 1 ]; then
@@ -516,7 +526,7 @@ Format:
 | child-2 | <role> | tests/ | waiting | |
 \`\`\`
 
-Write atomically: cat > \"${STATUS_FILE}.tmp\" ... && mv \"${STATUS_FILE}.tmp\" \"${STATUS_FILE}\"
+The wrapper creates the file before you start. Read it, then rewrite the whole file with the Write tool (or change it with Edit). Do not use \`mv\` or shell redirection for it.
 
 ## Task Delegation Criteria
 - Only delegate subtasks estimated at **10+ minutes** of work
@@ -545,7 +555,7 @@ To delegate a subtask:
 2. Launch via tmux:
    tmux split-pane -h \"CCORCH_DEPTH=${NEXT_DEPTH} CCORCH_SESSION_ID=${SESSION_ID} CCORCH_PARENT_CHANNEL=\${CHILD_CHANNEL} CCORCH_WORK_DIR=${WORK_DIR} CCORCH_PROJECT_DIR=${PROJECT_DIR} CCORCH_TIMEOUT=${TIMEOUT} CCORCH_MAX_PANES=${MAX_PANES} CCORCH_MAX_CHILDREN_D1=${MAX_CHILDREN_D1} CCORCH_MAX_CHILDREN_D2=${MAX_CHILDREN_D2} CCORCH_PARENT_ID=${CHILD_ID} bash ${SCRIPT_DIR}/ccorch-wrapper.sh '<subtask>'\"
 3. Wait in background: run tmux wait-for \${CHILD_CHANNEL} with run_in_background: true
-4. After signal, read the child's result file from ${WORK_DIR}/
+4. After signal, read the child's result file from ${WORK_DIR}/. A child signals at the end of each of its turns, not only when it is done: if its result file does not exist yet, the child is still working or is waiting for a human in its pane (look with \`tmux capture-pane -p -t <pane_id>\`), so wait on its channel again
 5. Update the status dashboard with the child's result
 
 ## Worktree Usage
@@ -556,10 +566,11 @@ If the task involves code changes that could conflict between children:
 
 ## Pane Cleanup
 After all children have completed and results are aggregated:
-1. List completed panes: \`ls ${WORK_DIR}/*.pane\`
-2. Close each pane: \`tmux kill-pane -t <pane_id>\` (read pane ID from .pane files)
-3. Leave the \`.pane\` files in place (the wrapper ignores dead panes, and your own record is among them)
-4. Update the status dashboard to reflect cleanup"
+1. List completed panes: \`ls ${WORK_DIR}/*.pane\`. Your own record (${CHILD_ID}.pane) is among them: skip it
+2. Close each of your children's panes: \`tmux kill-pane -t <pane_id>\` (read pane ID from .pane files). Never close your own pane: that ends this session before you write your result
+3. Leave the \`.pane\` files in place (the wrapper ignores dead panes)
+4. Update the status dashboard to reflect cleanup
+Do this before you write your own result file: once that file exists, the user's session is told you are done and reads it."
 
 elif [ "$DEPTH" -eq 2 ]; then
   NEXT_DEPTH=3
@@ -584,12 +595,12 @@ You can further delegate subtasks to grandchild panes (DEPTH=3, max depth). To c
 2. Launch via tmux:
    tmux split-pane -h \"CCORCH_DEPTH=${NEXT_DEPTH} CCORCH_SESSION_ID=${SESSION_ID} CCORCH_PARENT_CHANNEL=\${CHILD_CHANNEL} CCORCH_WORK_DIR=${WORK_DIR} CCORCH_PROJECT_DIR=${PROJECT_DIR} CCORCH_TIMEOUT=${TIMEOUT} CCORCH_MAX_PANES=${MAX_PANES} CCORCH_MAX_CHILDREN_D1=${MAX_CHILDREN_D1} CCORCH_MAX_CHILDREN_D2=${MAX_CHILDREN_D2} CCORCH_PARENT_ID=${CHILD_ID} bash ${SCRIPT_DIR}/ccorch-wrapper.sh '<subtask>'\"
 3. Wait in background: run tmux wait-for \${CHILD_CHANNEL} with run_in_background: true
-4. After signal, read the grandchild's result file from ${WORK_DIR}/
+4. After signal, read the grandchild's result file from ${WORK_DIR}/. A grandchild signals at the end of each of its turns: if its result file does not exist yet, it is still working or is waiting for a human in its pane, so wait on its channel again
 
 ## Pane Cleanup
-After grandchildren complete, close their panes:
+After grandchildren complete, close their panes, and do this before you write your own result file:
 1. Read pane ID from .pane files: \`cat ${WORK_DIR}/<grandchild_id>.pane\`
-2. Close: \`tmux kill-pane -t <pane_id>\`"
+2. Close: \`tmux kill-pane -t <pane_id>\`. Close only your grandchildren's panes, never your own (${CHILD_ID}.pane)"
 
 else
   SYSTEM_PROMPT="${SYSTEM_PROMPT}
@@ -628,11 +639,7 @@ What was done and the outcome.
 Any unexpected findings or important observations.
 \`\`\`
 
-Write to a temporary file first, then rename:
-  cat > \"${RESULT_FILE}.tmp\" <<'RESULTEOF'
-  ... content ...
-  RESULTEOF
-  mv \"${RESULT_FILE}.tmp\" \"${RESULT_FILE}\""
+Write it with the Write tool, in one go, when you are done. Do not write it through a temporary file and \`mv\`."
 
 # --- Export env vars for Stop hook ---
 # The ccorch Stop hook (hooks/stop_signal.sh) reads these to signal the parent.
@@ -644,6 +651,8 @@ export CCORCH_WORK_DIR
 export CCORCH_PROJECT_DIR
 export CCORCH_PARENT_PANE="${CCORCH_PARENT_PANE:-}"
 export CCORCH_RESULT_FILE="$RESULT_FILE"
+# Only the session's Main Brain has its result copied to result.md by the Stop hook.
+export CCORCH_COPY_RESULT="$COPY_RESULT"
 
 # --- Launch Claude Code (interactive mode) ---
 # Interactive mode shows the TUI so users can see real-time progress.
@@ -711,7 +720,7 @@ printf '%s' "$TASK" > "$TASK_FILE"
 (
   sleep "$TIMEOUT"
   # Only act if no result file yet (task still running)
-  if [ ! -f "$RESULT_FILE" ]; then
+  if [ ! -s "$RESULT_FILE" ]; then
     {
       cat > "${RESULT_FILE}.tmp" <<EOF
 ---
@@ -745,6 +754,7 @@ WATCHDOG_PID=$!
 SENDER_PID=$!
 
 # Launch Claude interactively (blocks until Claude exits)
+CLAUDE_STARTED=1
 CLAUDE_RC=0
 "${CLAUDE_CMD[@]}" || CLAUDE_RC=$?
 
@@ -764,7 +774,7 @@ rm -f "$TASK_FILE"
 # Claude exited without writing a result file. Exiting is not the same as succeeding:
 # a non-zero exit is an error, and a clean exit is only "incomplete" because nothing
 # says the task was done.
-if [ ! -f "$RESULT_FILE" ]; then
+if [ ! -s "$RESULT_FILE" ]; then
   if [ "$CLAUDE_RC" -ne 0 ]; then
     FALLBACK_STATUS="error"
     FALLBACK_TITLE="Error"

@@ -2,6 +2,38 @@
 
 Earlier versions: see the git history.
 
+## 0.6.1 — 2026-10-04
+
+Two problems found by the 0.6.0 live check (refs #11).
+
+### Fixed
+
+- **The user's session was signalled before there was a result to read.** The Stop hook
+  runs at the end of every turn and signalled every time; in the live check the user's
+  session was woken three times before `result.md` existed. For the session's Main Brain,
+  the hook now signals only once its result file exists and is non-empty, after copying it
+  to `result.md`. `/ccor` waits again until `result.md` exists, and stops instead of
+  spinning if `tmux wait-for` fails. The wrapper's exit copies the result again when
+  `result.md` is absent or differs from it.
+- Children and grandchildren still signal their parent at every turn: their parent now
+  checks for the child's result file and waits again when there is none. Gating them too
+  would hide a stuck child, because a parent's own timeout runs out first.
+- An empty result file counts as no result: the watchdog and the wrapper's exit write their
+  own result over it.
+- **Panes stopped at a user's ask rule on `mv`.** The prompt told panes to write
+  `status.md` and the result file through a temporary file and `mv`; an ask rule such as
+  `Bash(mv *)` overrides auto mode, so the pane waited for a human. Panes now write both
+  with the Write tool (or Edit). `/ccor` no longer deletes `.pane` files with `rm` in its
+  cleanup step; the wrapper ignores dead panes.
+
+### Changed
+
+- The prompt says the result file is the final answer: write it once, at the end, and do not
+  write a provisional result there. The Main Brain and children close their children's
+  panes, never their own, before writing their own result.
+- A Main Brain that is stuck and has written no result no longer wakes the user's session at
+  every turn; the session hears from it when the Main Brain's `CCORCH_TIMEOUT` runs out.
+
 ## 0.6.0 — 2026-10-04
 
 The depth and pane limits are now enforced by the wrapper, and panes run in auto

@@ -36,8 +36,8 @@ Main Brain (DEPTH=1)
   ├── tmux split-pane → Child A (DEPTH=2)
   ├── tmux split-pane → Child B (DEPTH=2)
   ├── Wait for children via tmux wait-for
-  ├── Aggregate results → /tmp/ccorch/<id>/result.md
-  └── tmux wait-for -S CCORCH_DONE_<id>
+  ├── Close children's panes, write its own result file (Write tool)
+  └── Stop hook: copy → /tmp/ccorch/<id>/result.md, then tmux wait-for -S CCORCH_DONE_<id>
            │
 Child (DEPTH=2)
   │
@@ -165,10 +165,10 @@ mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
 ```
 ccorch/
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin metadata (v0.5.0)
+│   └── plugin.json              # Plugin metadata (v0.6.1)
 ├── hooks/
 │   ├── hooks.json               # Stop hook registration
-│   └── stop_signal.sh           # Signals the parent pane on Stop
+│   └── stop_signal.sh           # Signals the parent pane on Stop (the Main Brain: once its result exists)
 ├── skills/
 │   └── ccor/
 │       └── SKILL.md             # Skill definition
