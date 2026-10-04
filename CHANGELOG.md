@@ -7,6 +7,35 @@ Earlier versions: see the git history.
 The depth and pane limits are now enforced by the wrapper, and panes run in auto
 mode ([DEC-006](docs/sdd/design/decisions/DEC-006.md), fixes #9).
 
+### Upgrading from 0.5.x
+
+- **Panes may now stop and ask you.** Up to 0.5.x, panes ran with the
+  permission bypass and did not prompt for ordinary actions. From 0.6.0 they
+  run in auto mode, and a pane waits for a human when the classifier blocks an
+  action. A pane still waiting when `CCORCH_TIMEOUT` (default 600 s) runs out
+  is stopped with `status: timeout`. Watch the panes of a long run instead of
+  leaving it unattended.
+- **Without auto mode, every pane prompts.** When auto mode is not available to
+  the pane's session (a model that does not support it, auto mode turned off
+  with the `disableAutoMode` setting, or turned off by Anthropic), Claude Code
+  starts each pane in Manual mode, which asks before most actions. See
+  [permission modes](https://code.claude.com/docs/en/permission-modes) for the
+  supported models and the
+  [settings reference](https://code.claude.com/docs/en/settings-reference) for
+  the setting. A pane's status bar shows `auto mode on` only when auto mode is
+  active. The start gate and the deny rules apply in every mode.
+- **The limits are now real.** The defaults are `CCORCH_MAX_PANES=8`,
+  `CCORCH_MAX_CHILDREN_D1=3` and `CCORCH_MAX_CHILDREN_D2=2`, counted on live
+  panes. Before, the children limits never reached child panes. Set lower
+  values in the `env` block of your settings if your host is small.
+- **A refused pane is a result, not a failure.** A pane over a limit does not
+  start; its result file says `status: refused` with the reason.
+- **A leftover start lock is removed by hand.** The lock is per run
+  (`/tmp/ccorch/<session>/.lock.d`). If a wrapper is killed while it holds the
+  lock, later panes of the same run wait (10 s) and are refused with the lock
+  path in the reason. Remove that directory once no pane of that run is
+  running; a new `/ccor` run uses a new directory and is not affected.
+
 ### Changed
 
 - Panes start with `--permission-mode auto` instead of the permission bypass flag.
