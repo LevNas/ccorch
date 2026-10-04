@@ -171,7 +171,9 @@ Panes start with `--permission-mode auto`, not with a permission bypass. Deny ru
 at every depth (the usual forms of `rm -rf`, force push, hard reset, `git clean` and
 `sudo`); depth 2 and 3 also deny `git push`, and depth 3 denies the Agent tool and `tmux`. The Bash deny rules catch
 the usual command form only and are not a security boundary; the boundaries are the
-auto-mode classifier and the start gate.
+auto-mode classifier and the start gate. The system prompt tells each pane
+not to work around a denial (for example with `sh -c` or a full path): that is a rule
+the pane must follow, not something the deny rules enforce.
 
 In auto mode a classifier reviews actions. If it blocks one, the pane may stop and wait:
 a human has to look at that pane and approve or redirect it. When a run is slow, tell the

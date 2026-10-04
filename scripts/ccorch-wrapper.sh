@@ -66,6 +66,7 @@ PARENT_ID="${CCORCH_PARENT_ID:-}"
 DRY_RUN="${CCORCH_DRY_RUN:-}"
 LOCK_DIR="${WORK_DIR}/.lock.d"
 LOCK_HELD=""
+WATCHDOG_PID=""   # set only when the watchdog starts; never inherited from the environment
 
 release_lock() {
   if [ -n "$LOCK_HELD" ]; then
@@ -207,6 +208,8 @@ is_live() {
 }
 
 # Depth is derived from the parent's recorded depth, not taken from the environment.
+# Initialized here so that an inherited DERIVED_DEPTH cannot set it.
+DERIVED_DEPTH=1
 if [ -z "$PARENT_ID" ]; then
   if [ "$DEPTH" != "1" ]; then
     refuse "CCORCH_PARENT_ID is required at depth ${DEPTH}"
@@ -245,7 +248,7 @@ else
   fi
 fi
 # Every later decision (deny list, children limit, prompt) uses this depth.
-DEPTH="${DERIVED_DEPTH:-1}"
+DEPTH="$DERIVED_DEPTH"
 CCORCH_DEPTH="$DEPTH"
 
 LIVE_COUNT=0

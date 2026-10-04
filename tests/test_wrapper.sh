@@ -225,6 +225,11 @@ expect_not "depth 1: Agent not denied" has_deny 'Agent'
 expect_not "depth 1: tmux not denied" has_deny 'Bash(tmux *)'
 expect "depth 1 without CCORCH_PARENT_ID: gate ok" gate_ok
 
+# An inherited DERIVED_DEPTH must not set the depth (it is derived, never read from the environment).
+new_case; run_dry 1 DERIVED_DEPTH=2
+expect "depth 1 with DERIVED_DEPTH=2 in the environment: still depth 1" gate_ok
+expect_not "depth 1 with DERIVED_DEPTH=2 in the environment: no depth-2 deny rule" has_deny 'Bash(git push *)'
+
 # --- Depth range ---
 
 new_case; run_dry 4 CCORCH_PARENT_ID=parent-1
