@@ -483,6 +483,8 @@ expect "real start: .pane holds the current pane id" file_is "${WORK_DIR}/${ID}.
 expect "real start: .parent holds the parent id" file_is "${WORK_DIR}/${ID}.parent" 'parent-1'
 expect "real start: .depth holds the depth" file_is "${WORK_DIR}/${ID}.depth" '2'
 expect "real start: claude was started" claude_started
+expect "real start: --add-dir gives the live session directory" \
+  bash -c 'awk "prev==\"--add-dir\"{print} {prev=\$0}" "$1" | grep -qxF -- "$2"' _ "$FAKE_CLAUDE_ARGV" "$WORK_DIR"
 expect "real start: lock released" lock_gone
 expect "real start: a child's result is not copied to result.md" test ! -e "${WORK_DIR}/result.md"
 
