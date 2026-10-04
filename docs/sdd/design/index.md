@@ -48,7 +48,7 @@ Child (DEPTH=2)
            │
 Grandchild (DEPTH=3)
   │
-  ├── Cannot create new panes (Agent tool disabled)
+  ├── Cannot create new panes (by system prompt; see the flag table in Security Considerations)
   ├── Execute assigned task only
   ├── Write results → /tmp/ccorch/<id>/grandchild-<n>.md
   └── tmux wait-for -S <parent_channel>
@@ -85,7 +85,7 @@ What the wrapper passes (`scripts/ccorch-wrapper.sh`), and what `claude --help` 
 | `--disallowedTools` | not passed | `"Agent"` | list of tool names "to deny" |
 | `--append-system-prompt` | yes | yes | appends a system prompt |
 
-The help text does not say whether `--allowedTools` or `--disallowedTools` restrict anything while permissions are bypassed: **not verified**. The allowlists at DEPTH 1 and 2 are identical. The Bash patterns are not a verified block on destructive commands; the only stated ban on them is the system prompt. The blocks below show the intended flags per depth.
+The help text does not say whether `--allowedTools` or `--disallowedTools` restrict anything while permissions are bypassed: **not verified**. The allowlists at DEPTH 1 and 2 are identical. The Bash patterns are not a verified block on destructive commands; the only stated ban on them is the system prompt. The wrapper writes the Bash patterns with commas inside the parentheses and a colon syntax, while the help text example is `"Bash(git *) Edit"`: how the patterns are parsed is also not verified. `--disallowedTools "Agent"` denies the subagent tool; panes are created through `tmux split-pane` via Bash, so it does not address pane creation. The blocks below show the intended flags per depth.
 
 Intended flags per depth (DEPTH 1 and 2 are identical; only DEPTH 3 differs; see the table above for what is verified):
 

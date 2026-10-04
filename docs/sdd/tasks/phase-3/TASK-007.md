@@ -28,7 +28,7 @@ Verify that the complete flow works end-to-end: plugin installation, skill invoc
    - Verify completion notification is received
 
 4. **Depth limit test**:
-   - Verify DEPTH=3 panes cannot create child panes (Agent tool disabled)
+   - Verify DEPTH=3 panes cannot create child panes (flags and system prompt; see NFR-SEC-003 for what is verified)
 
 5. **Timeout test** (manual):
    - Set CCORCH_TIMEOUT=10

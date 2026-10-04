@@ -14,9 +14,9 @@ Child panes shall not be able to execute destructive commands such as `git push 
 
 ## NFR-SEC-003: Structural Depth Overflow Prevention
 
-Agent tool invocations from DEPTH=3 panes shall be structurally prohibited via `--disallowedTools`. This is meant to prevent depth check bypass through prompt injection by controlling at the CLI flag level.
+Pane creation from DEPTH=3 panes shall be structurally prohibited at the CLI flag level. This is meant to prevent depth check bypass through prompt injection by controlling at the CLI flag level.
 
-**Current state:** the wrapper passes `--disallowedTools "Agent"` at DEPTH 3 only; whether it is enforced under `--dangerously-skip-permissions` is not verified. The DEPTH 3 system prompt also forbids creating panes.
+**Current state:** `--disallowedTools "Agent"` (DEPTH 3 only) denies the subagent tool. Panes are created with `tmux split-pane` through Bash, so this flag does not address pane creation. At DEPTH 3, pane creation is held back only by leaving `tmux:*` out of the Bash allowlist (not verified under `--dangerously-skip-permissions`) and by the system prompt.
 
 ## NFR-SEC-004: Session Isolation
 

@@ -74,7 +74,7 @@ Your Session ──► Main Brain (DEPTH=1)
 
 - **Permissions are bypassed**: the wrapper starts every pane with `--dangerously-skip-permissions` (`claude --help`: "Bypass all permission checks")
 - **Allowlist (`--allowedTools`)**: DEPTH 1 and 2 get `Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent`; DEPTH 3 gets the same list without `tmux:*` and `Agent`. `claude --help` documents the flag as a list of tool names to allow. Whether it restricts anything while permissions are bypassed is **not verified**
-- **Depth limit**: DEPTH 3 also gets `--disallowedTools "Agent"` (documented as a list of tool names to deny); whether it is enforced under the bypass is **not verified**. DEPTH 3's system prompt also tells it not to create panes
+- **Depth limit**: `--disallowedTools "Agent"` (DEPTH 3 only) denies the subagent tool. Panes are created with `tmux split-pane` through Bash, so this flag does not address pane creation. At DEPTH 3, pane creation is held back only by leaving `tmux:*` out of the Bash allowlist (not verified under `--dangerously-skip-permissions`) and by the system prompt.
 - **Prompt guard rails for destructive commands**: `git push --force`, `git reset --hard`, `branch -D` and `rm -rf` are forbidden only in each pane's system prompt (`--append-system-prompt`); no flag blocks them
 - **Timeout**: Panes auto-terminate after configurable timeout (default: 600s)
 

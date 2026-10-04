@@ -22,7 +22,7 @@ ccorch is a tmux-based orchestration plugin for Claude Code. Running the `/ccor`
 | REQ-001 | `/ccor` skill creates Main Brain pane automatically | US-001 | Defined |
 | REQ-002 | User session continues parallel work after launch | US-001 | Defined |
 | REQ-003 | Depth propagation via CCORCH_DEPTH env var | US-002 | Defined |
-| REQ-004 | Prohibit pane creation at DEPTH=3 via flag (enforcement under bypass not verified) | US-002 | Defined |
+| REQ-004 | Prohibit pane creation at DEPTH=3 (current state: system prompt, plus `tmux:*` left out of the Bash allowlist; both unverified or prompt-only, see NFR-SEC-003) | US-002 | Defined |
 | REQ-005 | tmux wait-for based signaling | US-003 | Defined |
 | REQ-006 | File-based data exchange via /tmp/ccorch/<session_id>/ | US-003 | Defined |
 | REQ-007 | Timeout to prevent infinite blocking | US-003 | Defined |
