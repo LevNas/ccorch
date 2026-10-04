@@ -82,7 +82,7 @@ What the wrapper passes (`scripts/ccorch-wrapper.sh`), and what `claude --help` 
 | Flag | DEPTH 1 | DEPTH 2 | DEPTH 3 |
 |------|---------|---------|---------|
 | `--permission-mode` | `auto` | `auto` | `auto` |
-| `--disallowedTools` | `Bash(rm -rf *)` `Bash(rm -fr *)` `Bash(rm -r -f *)` `Bash(rm -f -r *)` `Bash(git push --force *)` `Bash(git push *--force*)` `Bash(git push -f *)` `Bash(git push * +*)` `Bash(git reset --hard *)` `Bash(git clean *)` `Bash(sudo *)` | the DEPTH 1 rules and `Bash(git push *)` | the DEPTH 2 rules, `Agent` and `Bash(tmux *)` |
+| `--disallowedTools` | `Bash(rm -rf *)` `Bash(rm -fr *)` `Bash(rm -Rf *)` `Bash(rm -r -f *)` `Bash(rm -f -r *)` `Bash(rm -r --force *)` `Bash(rm --recursive *)` `Bash(git push --force *)` `Bash(git push *--force*)` `Bash(git push -f *)` `Bash(git push * -f*)` `Bash(git push * +*)` `Bash(git push *--delete*)` `Bash(git push * :*)` `Bash(git branch -D *)` `Bash(git reset --hard *)` `Bash(git clean *)` `Bash(sudo *)` | the DEPTH 1 rules, `Bash(git push *)` and `Bash(git -C * push*)` | the DEPTH 2 rules, `Agent` and `Bash(tmux *)` |
 | `--append-system-prompt` | yes | yes | yes |
 
 The permission bypass flag and `--allowedTools` are not passed: allow rules have no effect under the bypass, while deny rules hold in every mode. The Bash deny rules catch the usual command form only and are not a security boundary; the boundaries are the auto-mode classifier and the start gate, which refuses a pane over the depth, pane or children limits. See [NFR-SEC-003](../requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention) and [DEC-006](decisions/DEC-006.md).
@@ -92,12 +92,16 @@ What the wrapper runs (interactive Claude Code; the task is not passed with `-p`
 ```bash
 # DEPTH 1
 claude --permission-mode auto \
-  --disallowedTools 'Bash(rm -rf *)' 'Bash(rm -fr *)' 'Bash(rm -r -f *)' 'Bash(rm -f -r *)' \
-                    'Bash(git push --force *)' 'Bash(git push *--force*)' 'Bash(git push -f *)' \
-                    'Bash(git push * +*)' 'Bash(git reset --hard *)' 'Bash(git clean *)' 'Bash(sudo *)' \
+  --disallowedTools 'Bash(rm -rf *)' 'Bash(rm -fr *)' 'Bash(rm -Rf *)' 'Bash(rm -r -f *)' \
+                    'Bash(rm -f -r *)' 'Bash(rm -r --force *)' 'Bash(rm --recursive *)' \
+                    'Bash(git push --force *)' 'Bash(git push *--force*)' \
+                    'Bash(git push -f *)' 'Bash(git push * -f*)' 'Bash(git push * +*)' \
+                    'Bash(git push *--delete*)' 'Bash(git push * :*)' \
+                    'Bash(git branch -D *)' 'Bash(git reset --hard *)' 'Bash(git clean *)' \
+                    'Bash(sudo *)' \
   --append-system-prompt "$SYSTEM_PROMPT"
 
-# DEPTH 2: the same, with 'Bash(git push *)' added to --disallowedTools
+# DEPTH 2: the same, with 'Bash(git push *)' and 'Bash(git -C * push*)' added to --disallowedTools
 # DEPTH 3: DEPTH 2, with 'Agent' and 'Bash(tmux *)' added to --disallowedTools
 
 # Task delivery, started in the background before claude launches:

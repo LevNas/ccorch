@@ -3,8 +3,9 @@
 # scripts/ccorch-wrapper.sh. Plain bash; no tmux or claude needed (both are faked).
 #
 # Most cases use CCORCH_DRY_RUN=1. The cases that need a real start (records written,
-# signalling on refusal, claude's exit status) run the wrapper without it, against the
-# fake claude, in their own process group: the wrapper's watchdog ends with `kill 0`.
+# the lock, signalling on refusal, claude's exit status) run the wrapper without it,
+# against the fake claude, in their own process group: the wrapper's watchdog ends with
+# `kill 0`.
 #
 # Usage: bash tests/test_wrapper.sh
 
@@ -17,6 +18,7 @@ WRAPPER="${HERE}/../scripts/ccorch-wrapper.sh"
 
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
+mkdir -p "${ROOT}/tmp"
 
 # --- Fakes at the front of PATH ---
 # Everything they read or write is per case, set by new_case.
@@ -24,15 +26,24 @@ trap 'rm -rf "$ROOT"' EXIT
 FAKE_BIN="${ROOT}/bin"
 mkdir -p "$FAKE_BIN"
 
+# display-message prints $FAKE_PANE_ID (default %99; may be set empty). list-panes can fail
+# (FAKE_LIST_FAIL), be slow (FAKE_LIST_DELAY, to force races), or signal the lock owner
+# with TERM first (FAKE_LIST_KILL, to end the wrapper while it holds the lock).
 cat > "${FAKE_BIN}/tmux" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$FAKE_TMUX_LOG"
 case "$1" in
   list-panes)
     [ -e "$FAKE_LIST_FAIL" ] && exit 1
+    if [ -n "${FAKE_LIST_KILL:-}" ]; then
+      owner=$(cat "$FAKE_WORK_DIR/.lock.d/owner" 2>/dev/null)
+      [ -n "$owner" ] && kill -TERM "$owner"
+      sleep 1
+    fi
+    sleep "${FAKE_LIST_DELAY:-0}"
     cat "$FAKE_PANES_FILE"
     ;;
-  display-message) echo "%99" ;;
+  display-message) echo "${FAKE_PANE_ID-%99}" ;;
 esac
 exit 0
 EOF
@@ -71,27 +82,41 @@ fi
 CASE_N=0
 CASE_DIR=""
 WORK_DIR=""
+RESULT_DIR=""   # where the wrapper under test wrote its result: its OUT_DIR
 OUT=""
 ERR=""
 RC=0
+UNSET_VARS=()
+NO_TASK=""
+TASK_TEXT="test task"
 
 new_case() {
   CASE_N=$((CASE_N + 1))
   CASE_DIR="${ROOT}/case${CASE_N}"
   WORK_DIR="${CASE_DIR}/work"
+  RESULT_DIR="$WORK_DIR"
   mkdir -p "$WORK_DIR"
+  UNSET_VARS=()
+  NO_TASK=""
+  TASK_TEXT="test task"
   export FAKE_PANES_FILE="${CASE_DIR}/live-panes"
   export FAKE_TMUX_LOG="${CASE_DIR}/tmux.log"
   export FAKE_LIST_FAIL="${CASE_DIR}/list-panes-fails"
   export FAKE_CLAUDE_ARGV="${CASE_DIR}/claude-argv"
+  export FAKE_WORK_DIR="$WORK_DIR"
   export FAKE_CLAUDE_RC=0
+  export FAKE_LIST_DELAY=0
+  unset FAKE_LIST_KILL FAKE_PANE_ID
   : > "$FAKE_PANES_FILE"
   : > "$FAKE_TMUX_LOG"
+  live %99   # the fake current pane must be alive: the gate refuses otherwise
 }
 
 # Pane ids: the fake tmux reports the current pane as %99; fixtures use other ids.
 
 live() { printf '%s\n' "$@" >> "$FAKE_PANES_FILE"; }
+# only_live <ids...> — reset the live list to these ids plus the current pane
+only_live() { : > "$FAKE_PANES_FILE"; live %99 "$@"; }
 
 # record_pane <id> <pane_id> [<parent_id>] — a pane recorded in WORK_DIR, listed as alive.
 # No .depth file: it only takes part in the pane and sibling counts.
@@ -113,21 +138,39 @@ seed_parent() {
   seed_pane parent-1 %21 $(($1 - 1))
 }
 
-# run_wrapper <dry:1|0> <depth> [VAR=value ...] — sets OUT, ERR and RC.
+# run_wrapper <dry:1|0> <depth> [VAR=value ...] — sets OUT, ERR, RC and RESULT_DIR.
 # Output goes to files, not to $(...): the wrapper's background sleeps would hold a pipe.
 run_wrapper() {
   local dry="$1" depth="$2"; shift 2
-  local dry_env=()
-  if [ "$dry" = 1 ]; then dry_env=(CCORCH_DRY_RUN=1); fi
+  local task_args=("$TASK_TEXT") assigns=() kept=() unset_args=() a v skip
+  if [ -n "$NO_TASK" ]; then task_args=(); fi
+  assigns=(TMPDIR="${ROOT}/tmp" CCORCH_DEPTH="$depth" CCORCH_SESSION_ID=test
+           CCORCH_PARENT_CHANNEL=test-channel CCORCH_WORK_DIR="$WORK_DIR"
+           CCORCH_PROJECT_DIR="$ROOT" CCORCH_TIMEOUT=30)
+  if [ "$dry" = 1 ]; then assigns+=(CCORCH_DRY_RUN=1); fi
+  assigns+=("$@")
+  # A variable the case wants unset is dropped from the assignments and from the
+  # inherited environment (env stops reading options at the first NAME=VALUE).
+  for a in "${assigns[@]}"; do
+    skip=""
+    for v in "${UNSET_VARS[@]+"${UNSET_VARS[@]}"}"; do
+      case "$a" in "$v="*) skip=1 ;; esac
+    done
+    [ -n "$skip" ] || kept+=("$a")
+  done
+  for v in "${UNSET_VARS[@]+"${UNSET_VARS[@]}"}"; do unset_args+=(-u "$v"); done
   RC=0
-  run_pg env -u CCORCH_PARENT_ID -u CCORCH_MAX_PANES \
+  run_pg env -u CCORCH_PARENT_ID -u CCORCH_MAX_PANES -u TMUX_PANE \
       -u CCORCH_MAX_CHILDREN_D1 -u CCORCH_MAX_CHILDREN_D2 -u CCORCH_DRY_RUN \
-      "${dry_env[@]}" CCORCH_DEPTH="$depth" CCORCH_SESSION_ID=test \
-      CCORCH_PARENT_CHANNEL=test-channel CCORCH_WORK_DIR="$WORK_DIR" \
-      CCORCH_PROJECT_DIR="$ROOT" CCORCH_TIMEOUT=30 "$@" \
-      bash "$WRAPPER" 'test task' > "${CASE_DIR}/out" 2> "${CASE_DIR}/err" < /dev/null || RC=$?
+      "${unset_args[@]+"${unset_args[@]}"}" "${kept[@]}" \
+      bash "$WRAPPER" "${task_args[@]+"${task_args[@]}"}" > "${CASE_DIR}/out" 2> "${CASE_DIR}/err" < /dev/null || RC=$?
   OUT=$(cat "${CASE_DIR}/out")
   ERR=$(cat "${CASE_DIR}/err")
+  if [ "$dry" = 1 ]; then
+    RESULT_DIR=$(sed -n '1s/^out_dir: //p' "${CASE_DIR}/out")
+  else
+    RESULT_DIR="$WORK_DIR"
+  fi
 }
 run_dry()  { run_wrapper 1 "$@"; }
 run_real() { run_wrapper 0 "$@"; }
@@ -136,7 +179,7 @@ run_real() { run_wrapper 0 "$@"; }
 
 # result_path — the one result file of the wrapper under test; fails unless exactly one.
 result_path() {
-  local files=("${WORK_DIR}"/depth*.md)
+  local files=("${RESULT_DIR}"/depth*.md)
   [ "${#files[@]}" -eq 1 ] && [ -f "${files[0]}" ] || return 1
   printf '%s' "${files[0]}"
 }
@@ -145,6 +188,12 @@ result_has() {
   local path
   path=$(result_path) || return 1
   grep -qF -- "$1" "$path"
+}
+# status_lines — number of `status:` lines at the start of a line in the one result file
+status_lines() {
+  local path
+  path=$(result_path) || return 1
+  grep -c '^status:' "$path"
 }
 # child_id — the wrapper's CHILD_ID, from the name of its result file.
 child_id() {
@@ -186,11 +235,20 @@ no_files() { # no_files <glob...> — none of the globs matches an existing file
   for f in "$@"; do [ -e "$f" ] && return 1; done
   return 0
 }
+dir_is_empty() { [ -z "$(ls -A "$1")" ]; }
 tmux_logged() { grep -qF -- "$1" "$FAKE_TMUX_LOG"; }
+tmux_not_logged() { ! grep -qF -- "$1" "$FAKE_TMUX_LOG"; }
+lock_gone() { [ ! -e "${WORK_DIR}/.lock.d" ] && no_files "${WORK_DIR}"/.lock.d.stale.*; }
+claude_started() { [ -f "$FAKE_CLAUDE_ARGV" ]; }
 
-ALL_RULES=('Bash(rm -rf *)' 'Bash(rm -fr *)' 'Bash(rm -r -f *)' 'Bash(rm -f -r *)'
+# Rules every depth denies; depth 2 and 3 add the second list.
+ALL_RULES=('Bash(rm -rf *)' 'Bash(rm -fr *)' 'Bash(rm -Rf *)' 'Bash(rm -r -f *)' 'Bash(rm -f -r *)'
+           'Bash(rm -r --force *)' 'Bash(rm --recursive *)'
            'Bash(git push --force *)' 'Bash(git push *--force*)' 'Bash(git push -f *)'
-           'Bash(git push * +*)' 'Bash(git reset --hard *)' 'Bash(git clean *)' 'Bash(sudo *)')
+           'Bash(git push * -f*)' 'Bash(git push * +*)' 'Bash(git push *--delete*)'
+           'Bash(git push * :*)' 'Bash(git branch -D *)' 'Bash(git reset --hard *)'
+           'Bash(git clean *)' 'Bash(sudo *)')
+CHILD_RULES=('Bash(git push *)' 'Bash(git -C * push*)')
 
 # --- Claude arguments at every depth ---
 
@@ -205,6 +263,13 @@ for depth in 1 2 3; do
   for rule in "${ALL_RULES[@]}"; do
     expect "depth $depth: deny rule '$rule' between the flags" has_deny "$rule"
   done
+  for rule in "${CHILD_RULES[@]}"; do
+    if [ "$depth" -ge 2 ]; then
+      expect "depth $depth: deny rule '$rule' between the flags" has_deny "$rule"
+    else
+      expect_not "depth 1: no deny rule '$rule'" has_deny "$rule"
+    fi
+  done
 done
 
 # --- Per-depth differences ---
@@ -212,15 +277,12 @@ done
 new_case; seed_parent 3; run_dry 3 CCORCH_PARENT_ID=parent-1
 expect "depth 3: Agent denied" has_deny 'Agent'
 expect "depth 3: Bash(tmux *) denied" has_deny 'Bash(tmux *)'
-expect "depth 3: Bash(git push *) denied" has_deny 'Bash(git push *)'
 
 new_case; seed_parent 2; run_dry 2 CCORCH_PARENT_ID=parent-1
-expect "depth 2: Bash(git push *) denied" has_deny 'Bash(git push *)'
 expect_not "depth 2: Agent not denied" has_deny 'Agent'
 expect_not "depth 2: tmux not denied" has_deny 'Bash(tmux *)'
 
 new_case; run_dry 1
-expect_not "depth 1: git push not denied" has_deny 'Bash(git push *)'
 expect_not "depth 1: Agent not denied" has_deny 'Agent'
 expect_not "depth 1: tmux not denied" has_deny 'Bash(tmux *)'
 expect "depth 1 without CCORCH_PARENT_ID: gate ok" gate_ok
@@ -238,6 +300,9 @@ expect "depth 4: refused, result has status: refused" refused_with "CCORCH_DEPTH
 new_case; run_dry abc
 expect "depth 'abc': refused" refused_with "CCORCH_DEPTH must be 1, 2 or 3"
 
+new_case; run_dry '../../x'
+expect "depth '../../x': refused, result stays in the output directory" refused_with "CCORCH_DEPTH must be 1, 2 or 3"
+
 # --- Depth follows the parent's record, not the environment ---
 
 new_case; seed_parent 2; run_dry 3 CCORCH_PARENT_ID=parent-1
@@ -254,7 +319,7 @@ expect "claimed depth 1 with a parent: refused" refused_with "CCORCH_DEPTH=1 dis
 new_case; run_dry 2 CCORCH_PARENT_ID=ghost
 expect "missing parent record: refused" refused_with "no record of parent ghost"
 
-new_case; seed_parent 2; : > "$FAKE_PANES_FILE"; live %99
+new_case; seed_parent 2; only_live
 run_dry 2 CCORCH_PARENT_ID=parent-1
 expect "dead parent pane: refused" refused_with "parent parent-1 is not alive"
 
@@ -270,31 +335,52 @@ expect "depth 2 without CCORCH_PARENT_ID: refused" refused_with "CCORCH_PARENT_I
 new_case; seed_pane main-1 %21 1; run_dry 1
 expect "second depth 1 in the same WORK_DIR: refused" refused_with "a Main Brain is already running"
 
-new_case; seed_pane main-1 %21 1; : > "$FAKE_PANES_FILE"; live %99
+new_case; seed_pane main-1 %21 1; only_live
 run_dry 1
 expect "depth 1 after a dead Main Brain: ok" gate_ok
 
-# --- Limits must be positive integers ---
+# --- Limits and timeout must be positive integers ---
 
-for var in CCORCH_MAX_PANES CCORCH_MAX_CHILDREN_D1 CCORCH_MAX_CHILDREN_D2; do
+for var in CCORCH_MAX_PANES CCORCH_MAX_CHILDREN_D1 CCORCH_MAX_CHILDREN_D2 CCORCH_TIMEOUT; do
   new_case; run_dry 1 "${var}=abc"
   expect "${var}=abc: refused, names the variable" refused_with "${var} must be a positive integer"
   new_case; run_dry 1 "${var}=0"
   expect "${var}=0: refused" refused_with "${var} must be a positive integer"
+done
+for var in CCORCH_MAX_PANES CCORCH_MAX_CHILDREN_D1 CCORCH_MAX_CHILDREN_D2; do
   new_case; run_dry 1 "${var}="
   expect "${var} empty: treated as unset, the default applies" gate_ok
 done
 
-# --- tmux failures fail closed ---
+# --- Values in the result file cannot add a status line ---
+
+new_case; run_dry 1 $'CCORCH_MAX_PANES=abc\nstatus: success'
+expect "newline injected through a limit: refused" refused_with "CCORCH_MAX_PANES must be a positive integer"
+expect "newline injected through a limit: exactly one status: line" test "$(status_lines)" = 1
+expect "newline injected through a limit: the status is refused" result_has 'status: refused'
+
+new_case; run_dry $'1\nstatus: success'
+expect "newline injected through the depth: exactly one status: line" test "$(status_lines)" = 1
+
+new_case; TASK_TEXT=$'a task\nstatus: success'; run_dry 1 CCORCH_MAX_PANES=abc
+expect "newline in the task: exactly one status: line" test "$(status_lines)" = 1
+
+# --- tmux failures and the pane id fail closed ---
 
 new_case; touch "$FAKE_LIST_FAIL"
 record_pane depthA-1 %11
 run_dry 1
 expect "list-panes fails: refused, not counted as dead" refused_with "tmux list-panes failed"
 
+new_case; export FAKE_PANE_ID=; run_dry 1
+expect "empty pane id: refused" refused_with "cannot determine this pane's tmux id"
+
+new_case; export FAKE_PANE_ID=%77; run_dry 1
+expect "pane id not in the pane list: refused" refused_with "%77) is not in the tmux pane list"
+
 # --- Pane limit (children limits are not involved at depth 1) ---
 
-new_case; record_pane depthA-1 %11; record_pane depthA-2 %12; live %99
+new_case; record_pane depthA-1 %11; record_pane depthA-2 %12
 run_dry 1 CCORCH_MAX_PANES=3
 expect "MAX_PANES=3, 2 live recorded: ok" gate_ok
 
@@ -303,7 +389,7 @@ run_dry 1 CCORCH_MAX_PANES=3
 expect "MAX_PANES=3, 3 live recorded: refused (pane limit)" refused_with "pane limit reached"
 
 new_case; record_pane depthA-1 %11; record_pane depthA-2 %12; record_pane depthA-3 %13
-: > "$FAKE_PANES_FILE"; live %11 %12 %99   # %13 is dead
+only_live %11 %12   # %13 is dead
 run_dry 1 CCORCH_MAX_PANES=3
 expect "MAX_PANES=3, 3 recorded but 1 dead: ok" gate_ok
 
@@ -339,9 +425,26 @@ expect "siblings under another parent are not counted: ok" gate_ok
 
 new_case; seed_parent 2
 record_pane depthB-1 %11 parent-1; record_pane depthB-2 %12 parent-1
-: > "$FAKE_PANES_FILE"; live %21 %11 %99   # %12 is dead
+only_live %21 %11   # %12 is dead
 run_dry 2 CCORCH_PARENT_ID=parent-1 CCORCH_MAX_CHILDREN_D1=2 CCORCH_MAX_PANES=20
 expect "a dead sibling is not counted: ok" gate_ok
+
+# --- Dry run leaves no trace in the live session ---
+
+new_case; run_dry 1
+expect "dry run: the live WORK_DIR has no new file" dir_is_empty "$WORK_DIR"
+expect "dry run: the output directory holds the result, status.md and the prompt" \
+  bash -c 'ls "$1"/depth*.md "$1"/status.md "$1"/*.dry-run.system-prompt >/dev/null 2>&1' _ "$RESULT_DIR"
+expect "dry run: result file says status: dry-run" result_has 'status: dry-run'
+expect "dry run: claude not started" test ! -e "$FAKE_CLAUDE_ARGV"
+expect "dry run: parent channel not signalled" tmux_not_logged "wait-for"
+
+new_case; WORK_DIR="${CASE_DIR}/never-created"; run_dry 1
+expect "dry run: a missing WORK_DIR is not created" test ! -e "$WORK_DIR"
+
+new_case; seed_pane main-1 %21 1; run_dry 1
+expect "refused dry run: the live WORK_DIR still has only the seeded files" \
+  bash -c 'test "$(ls -A "$1" | wc -l)" -eq 2' _ "$WORK_DIR"
 
 # --- Records: written by a real start only ---
 
@@ -352,17 +455,9 @@ expect "real start: wrapper exits 0" test "$RC" -eq 0
 expect "real start: .pane holds the current pane id" file_is "${WORK_DIR}/${ID}.pane" '%99'
 expect "real start: .parent holds the parent id" file_is "${WORK_DIR}/${ID}.parent" 'parent-1'
 expect "real start: .depth holds the depth" file_is "${WORK_DIR}/${ID}.depth" '2'
-expect "real start: claude was started" test -f "$FAKE_CLAUDE_ARGV"
-expect "real start: lock released" test ! -e "${WORK_DIR}/.lock.d"
-
-new_case; run_dry 1
-expect "dry run: no .pane, .parent or .depth written" \
-  no_files "${WORK_DIR}"/depth*.pane "${WORK_DIR}"/depth*.parent "${WORK_DIR}"/depth*.depth
-expect "dry run: status.md not written" test ! -e "${WORK_DIR}/status.md"
-expect "dry run: claude not started" test ! -e "$FAKE_CLAUDE_ARGV"
-expect "dry run: result file says status: dry-run" result_has 'status: dry-run'
-expect "dry run: parent channel not signalled" bash -c '! grep -qF "wait-for" "$1"' _ "$FAKE_TMUX_LOG"
-expect "dry run: lock released" test ! -e "${WORK_DIR}/.lock.d"
+expect "real start: claude was started" claude_started
+expect "real start: lock released" lock_gone
+expect "real start: a child's result is not copied to result.md" test ! -e "${WORK_DIR}/result.md"
 
 # --- Refusal in a real start signals the parent and never reaches claude ---
 
@@ -370,6 +465,45 @@ new_case; run_real 4 CCORCH_PARENT_ID=parent-1
 expect "real start, depth 4: refused with status: refused" refused_with "CCORCH_DEPTH must be 1, 2 or 3"
 expect "real start, depth 4: parent channel signalled" tmux_logged 'wait-for -S test-channel'
 expect "real start, depth 4: claude not reached" test ! -e "$FAKE_CLAUDE_ARGV"
+
+# --- Failures before the gate still reach the parent ---
+
+new_case; run_real 1 CCORCH_PROJECT_DIR="${ROOT}/does-not-exist"
+expect "missing PROJECT_DIR directory: refused" refused_with "CCORCH_PROJECT_DIR is not a directory"
+expect "missing PROJECT_DIR directory: parent signalled" tmux_logged 'wait-for -S test-channel'
+
+new_case; UNSET_VARS=(CCORCH_PROJECT_DIR); run_real 1
+expect "unset PROJECT_DIR: refused, parent signalled" refused_with "CCORCH_PROJECT_DIR is required"
+expect "unset PROJECT_DIR: parent channel signalled" tmux_logged 'wait-for -S test-channel'
+
+new_case; UNSET_VARS=(CCORCH_SESSION_ID); run_real 1
+expect "unset SESSION_ID: refused" refused_with "CCORCH_SESSION_ID is required"
+
+new_case; NO_TASK=1; run_real 1
+expect "missing task argument: refused, parent signalled" refused_with "the task argument is missing"
+expect "missing task argument: parent channel signalled" tmux_logged 'wait-for -S test-channel'
+
+new_case; UNSET_VARS=(CCORCH_WORK_DIR); run_real 1
+expect "unset WORK_DIR: exit 2" test "$RC" -eq 2
+expect "unset WORK_DIR: message on stderr" bash -c 'grep -q CCORCH_WORK_DIR <<< "$1"' _ "$ERR"
+expect "unset WORK_DIR: no signal is possible, none sent" tmux_not_logged 'wait-for'
+
+new_case; UNSET_VARS=(CCORCH_PARENT_CHANNEL); run_real 1
+expect "unset PARENT_CHANNEL: exit 2" test "$RC" -eq 2
+
+# --- The Main Brain's result reaches the user's session as result.md ---
+
+new_case; run_real 1 CCORCH_MAX_PANES=abc
+expect "Main Brain refusal: result.md holds the refusal" grep -qF 'status: refused' "${WORK_DIR}/result.md"
+
+new_case; run_real 1
+expect "Main Brain ends without a result file: result.md says incomplete" grep -qF 'status: incomplete' "${WORK_DIR}/result.md"
+
+new_case; seed_pane main-1 %21 1; run_real 1
+expect "refusal because a Main Brain is running: result.md is not planted" test ! -e "${WORK_DIR}/result.md"
+
+new_case; run_real 2
+expect "a child's refusal does not write result.md" test ! -e "${WORK_DIR}/result.md"
 
 # --- claude's exit status is not discarded ---
 
@@ -382,24 +516,107 @@ new_case; run_real 1
 expect "claude exits 0, no result file: status: incomplete" result_has 'status: incomplete'
 expect_not "claude exits 0, no result file: not success" result_has 'status: success'
 
-# --- Lock ---
+# --- A large task does not abort the wrapper ---
+
+new_case; TASK_TEXT="$(head -c 110000 /dev/zero | tr '\0' 'a')"$'\nsecond line'
+run_real 1
+expect "a task of about 110 KB: wrapper exits 0" test "$RC" -eq 0
+expect "a task of about 110 KB: claude was started" claude_started
+expect "a task of about 110 KB: result file written" result_has 'status: incomplete'
+
+# --- Lock: released on every exit path that holds it ---
+
+new_case; record_pane depthA-1 %11; record_pane depthA-2 %12; record_pane depthA-3 %13
+run_real 1 CCORCH_MAX_PANES=3
+expect "pane limit refusal under the lock: refused" refused_with "pane limit reached"
+expect "pane limit refusal under the lock: lock released" lock_gone
+
+new_case; seed_parent 2
+record_pane depthB-1 %11 parent-1; record_pane depthB-2 %12 parent-1
+run_real 2 CCORCH_PARENT_ID=parent-1 CCORCH_MAX_CHILDREN_D1=2 CCORCH_MAX_PANES=20
+expect "children limit refusal under the lock: refused" refused_with "CCORCH_MAX_CHILDREN_D1=2"
+expect "children limit refusal under the lock: lock released" lock_gone
+
+new_case; touch "$FAKE_LIST_FAIL"; run_real 1
+expect "list-panes failure under the lock: refused" refused_with "tmux list-panes failed"
+expect "list-panes failure under the lock: lock released" lock_gone
+
+new_case; seed_parent 2; run_real 3 CCORCH_PARENT_ID=parent-1
+expect "depth mismatch under the lock: refused" refused_with "disagrees"
+expect "depth mismatch under the lock: lock released" lock_gone
+
+# A non-refusal exit while holding the lock: the wrapper gets SIGTERM during list-panes.
+# Only cleanup() can release the lock and signal the parent here.
+new_case; export FAKE_LIST_KILL=1; run_real 1
+expect "TERM while holding the lock: lock released by cleanup()" lock_gone
+expect "TERM while holding the lock: result says status: error" result_has 'status: error'
+expect "TERM while holding the lock: parent channel signalled" tmux_logged 'wait-for -S test-channel'
+
+# --- Lock: three children start at once; the limit must hold ---
+# list-panes is slow (inside the lock), so without the lock all three would count zero
+# siblings and pass.
+
+launch_child() { # launch_child <n> — a real depth-2 start with its own pane id and files
+  local n="$1"
+  (
+    RCN=0
+    run_pg env -u CCORCH_DRY_RUN -u TMUX_PANE TMPDIR="${ROOT}/tmp" CCORCH_DEPTH=2 CCORCH_SESSION_ID=test \
+      CCORCH_PARENT_CHANNEL=test-channel CCORCH_WORK_DIR="$WORK_DIR" CCORCH_PROJECT_DIR="$ROOT" \
+      CCORCH_TIMEOUT=30 CCORCH_PARENT_ID=parent-1 CCORCH_MAX_PANES=9 CCORCH_MAX_CHILDREN_D1=2 \
+      FAKE_PANE_ID="%3${n}" FAKE_CLAUDE_ARGV="${CASE_DIR}/claude-argv.${n}" \
+      bash "$WRAPPER" 'test task' > "${CASE_DIR}/out.${n}" 2> "${CASE_DIR}/err.${n}" < /dev/null || RCN=$?
+    echo "$RCN" > "${CASE_DIR}/rc.${n}"
+  ) &
+}
+
+new_case; seed_parent 2; live %31 %32 %33
+export FAKE_LIST_DELAY=0.5
+launch_child 1; launch_child 2; launch_child 3
+wait
+PASSED=0; REFUSED=0
+for n in 1 2 3; do
+  case "$(cat "${CASE_DIR}/rc.${n}")" in
+    0) PASSED=$((PASSED + 1)) ;;
+    1) REFUSED=$((REFUSED + 1)); REFUSED_ERR="$(cat "${CASE_DIR}/err.${n}")" ;;
+  esac
+done
+expect "three simultaneous children, D1=2: exactly 2 pass" test "$PASSED" -eq 2
+expect "three simultaneous children, D1=2: exactly 1 is refused" test "$REFUSED" -eq 1
+expect "three simultaneous children, D1=2: the refusal names CCORCH_MAX_CHILDREN_D1" \
+  bash -c 'grep -qF CCORCH_MAX_CHILDREN_D1 <<< "$1"' _ "${REFUSED_ERR:-}"
+expect "three simultaneous children: lock released" lock_gone
+
+# --- Lock: stale and held locks (real runs: a dry run takes no lock) ---
+
+new_case; sleep 0 & DEAD_PID=$!; wait "$DEAD_PID"
+mkdir "${WORK_DIR}/.lock.d"; printf '%s\n' "$DEAD_PID" > "${WORK_DIR}/.lock.d/owner"
+run_real 1
+expect "lock owned by a dead pid: recovered, claude started" claude_started
+expect "lock owned by a dead pid: nothing left behind" lock_gone
+
+new_case; sleep 60 & LIVE_OWNER=$!
+mkdir "${WORK_DIR}/.lock.d"; printf '%s\n' "$LIVE_OWNER" > "${WORK_DIR}/.lock.d/owner"
+run_real 1
+expect "lock owned by a live pid: refused after the timeout" refused_with "lock timeout"
+expect "lock owned by a live pid: left in place, owner unchanged" file_is "${WORK_DIR}/.lock.d/owner" "$LIVE_OWNER"
+kill "$LIVE_OWNER" 2>/dev/null; wait "$LIVE_OWNER" 2>/dev/null
+
+new_case; mkdir "${WORK_DIR}/.lock.d"
+run_real 1
+expect "fresh lock with no owner file: not removed, refused after the timeout" refused_with "lock timeout"
+expect "fresh lock with no owner file: left in place" test -d "${WORK_DIR}/.lock.d"
 
 new_case; mkdir "${WORK_DIR}/.lock.d"
 touch -t "$(date -d '2 minutes ago' +%Y%m%d%H%M 2>/dev/null || date -v-2M +%Y%m%d%H%M)" "${WORK_DIR}/.lock.d"
-run_dry 1
-expect "stale lock directory: recovered, gate ok" gate_ok
-expect "stale lock directory: released afterwards" test ! -e "${WORK_DIR}/.lock.d"
-
-new_case; mkdir "${WORK_DIR}/.lock.d"
-run_dry 1
-expect "fresh lock held by someone else: refused after the timeout" refused_with "lock timeout"
-expect "fresh lock held by someone else: left in place" test -d "${WORK_DIR}/.lock.d"
+run_real 1
+expect "old lock with no owner file: recovered, claude started" claude_started
+expect "old lock with no owner file: nothing left behind" lock_gone
 
 # --- System prompt ---
 
 new_case; run_dry 1 CCORCH_MAX_PANES=5 CCORCH_MAX_CHILDREN_D1=2 CCORCH_MAX_CHILDREN_D2=1
 ID=$(child_id)
-PROMPT_FILE="${WORK_DIR}/${ID}.dry-run.system-prompt"
+PROMPT_FILE="${RESULT_DIR}/${ID}.dry-run.system-prompt"
 for needle in 'CCORCH_MAX_PANES=5' 'CCORCH_MAX_CHILDREN_D1=2' 'CCORCH_MAX_CHILDREN_D2=1' "CCORCH_PARENT_ID=${ID} "; do
   expect "depth 1 prompt: split-pane template has ${needle}" grep -qF -- "$needle" "$PROMPT_FILE"
 done
@@ -407,7 +624,7 @@ done
 new_case; seed_parent 2
 run_dry 2 CCORCH_PARENT_ID=parent-1 CCORCH_MAX_PANES=5 CCORCH_MAX_CHILDREN_D1=2 CCORCH_MAX_CHILDREN_D2=1
 ID=$(child_id)
-PROMPT_FILE="${WORK_DIR}/${ID}.dry-run.system-prompt"
+PROMPT_FILE="${RESULT_DIR}/${ID}.dry-run.system-prompt"
 for needle in 'CCORCH_MAX_PANES=5' 'CCORCH_MAX_CHILDREN_D1=2' 'CCORCH_MAX_CHILDREN_D2=1' "CCORCH_PARENT_ID=${ID} "; do
   expect "depth 2 prompt: split-pane template has ${needle}" grep -qF -- "$needle" "$PROMPT_FILE"
 done

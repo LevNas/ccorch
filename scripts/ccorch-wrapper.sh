@@ -27,58 +27,131 @@
 #   CCORCH_PARENT_PANE    — Parent's tmux pane ID (reserved for future layout use)
 #   CCORCH_PARENT_ID      — Parent's child ID; required at depth 2 and 3, unset at depth 1.
 #                           The depth must equal the parent's recorded depth + 1.
-#   CCORCH_DRY_RUN        — If set, run the start gate (no records written), print the
-#                           claude argv, and exit without starting claude
+#   CCORCH_DRY_RUN        — If set, run the start gate read-only (no lock, no records), print
+#                           "out_dir: <temp dir>" and the claude argv, and exit without
+#                           starting claude. Every file it writes is in that temp dir.
+#
+# CCORCH_WORK_DIR and CCORCH_PARENT_CHANNEL are checked first (exit 2 if missing: no result
+# or signal is possible without them); every later failure is a "refused" result.
 
 set -euo pipefail
 
-# --- Validate inputs ---
+# --- Inputs that must exist before anything else ---
+# Without a work directory there is nowhere to write a result file, and without a parent
+# channel there is nothing to signal, so the parent could not be told about any failure.
+# That is the one case that can only print to stderr and exit; everything after the trap
+# below goes through refuse() instead.
 
-TASK="${1:?Usage: ccorch-wrapper.sh '<task description>'}"
-DEPTH="${CCORCH_DEPTH:?CCORCH_DEPTH is required (1, 2, or 3)}"
-SESSION_ID="${CCORCH_SESSION_ID:?CCORCH_SESSION_ID is required}"
-PARENT_CHANNEL="${CCORCH_PARENT_CHANNEL:?CCORCH_PARENT_CHANNEL is required}"
-WORK_DIR="${CCORCH_WORK_DIR:?CCORCH_WORK_DIR is required}"
-PROJECT_DIR="${CCORCH_PROJECT_DIR:?CCORCH_PROJECT_DIR is required}"
+if [ -z "${CCORCH_WORK_DIR:-}" ] || [ -z "${CCORCH_PARENT_CHANNEL:-}" ]; then
+  echo "ccorch: CCORCH_WORK_DIR and CCORCH_PARENT_CHANNEL are required: without them no result can be written and the parent cannot be signalled" >&2
+  exit 2
+fi
+PARENT_CHANNEL="$CCORCH_PARENT_CHANNEL"
+DRY_RUN="${CCORCH_DRY_RUN:-}"
+
+# Absolute paths before any cd, so the Stop hook and claude get the same directories.
+abs_path() {
+  case "$1" in
+    /*) printf '%s' "$1" ;;
+    *) printf '%s/%s' "$PWD" "$1" ;;
+  esac
+}
+# WORK_DIR doubles as the state directory: the pane records and the lock live here, and a
+# dry run only reads it.
+WORK_DIR="$(abs_path "$CCORCH_WORK_DIR")"
+PROJECT_DIR=""
+if [ -n "${CCORCH_PROJECT_DIR:-}" ]; then
+  PROJECT_DIR="$(abs_path "$CCORCH_PROJECT_DIR")"
+fi
+
+# OUT_DIR is where every write of this process goes: the result file, status.md, result.md
+# and the prompt dump. Outside a dry run it is WORK_DIR. A dry run writes into a fresh
+# temporary directory instead and leaves the live session untouched (and never creates it).
+if [ -n "$DRY_RUN" ]; then
+  OUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ccorch-dry.XXXXXX")"
+  echo "out_dir: ${OUT_DIR}"
+else
+  if ! mkdir -p "$WORK_DIR"; then
+    echo "ccorch: cannot create CCORCH_WORK_DIR ${WORK_DIR}" >&2
+    exit 2
+  fi
+  OUT_DIR="$WORK_DIR"
+fi
+
+TASK_GIVEN=""
+TASK=""
+if [ "$#" -ge 1 ]; then
+  TASK_GIVEN=1
+  TASK="$1"
+fi
+DEPTH="${CCORCH_DEPTH:-}"
+SESSION_ID="${CCORCH_SESSION_ID:-}"
 TIMEOUT="${CCORCH_TIMEOUT:-600}"
 MAX_PANES="${CCORCH_MAX_PANES:-8}"
 MAX_CHILDREN_D1="${CCORCH_MAX_CHILDREN_D1:-3}"
 MAX_CHILDREN_D2="${CCORCH_MAX_CHILDREN_D2:-2}"
+PARENT_ID="${CCORCH_PARENT_ID:-}"
 
-# The result file, the lock and the pane records all live here; create it on every path.
-mkdir -p "$WORK_DIR"
-
-# Resolve the directory where this script lives (for child pane references)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Change to the user's project directory — all agents must run in the same context
-cd "$PROJECT_DIR" || { echo "Error: Cannot cd to $PROJECT_DIR"; exit 1; }
+# Everything that ends up in a front-matter line is sanitized: one line, no double quotes,
+# no backslashes, bounded length. A value from the environment or the task must not be
+# able to add a second `status:` line to a result file.
+sanitize_to() { # sanitize_to <variable> <max length> <value>
+  local v="$3"
+  v="${v//$'\n'/ }"
+  v="${v//$'\r'/ }"
+  v="${v//\"/\'}"
+  v="${v//\\/ }"
+  printf -v "$1" '%s' "${v:0:$2}"
+}
+sanitize_to DEPTH_FM 20 "$DEPTH"
+sanitize_to TASK_FM 100 "$TASK"
 
 # Generate unique child ID. PID and $RANDOM, not date +%N: BSD date has no %N, and a
 # shared ID would make panes overwrite each other's .pane/.parent/.depth files and
-# defeat the gate.
-CHILD_ID="depth${DEPTH}-$$-${RANDOM}"
-RESULT_FILE="${WORK_DIR}/${CHILD_ID}.md"
+# defeat the gate. The depth label is 1, 2 or 3, and x for anything else, so that a
+# hostile CCORCH_DEPTH cannot move the result file out of the work directory.
+case "$DEPTH" in
+  1|2|3) DEPTH_LABEL="$DEPTH" ;;
+  *) DEPTH_LABEL="x" ;;
+esac
+CHILD_ID="depth${DEPTH_LABEL}-$$-${RANDOM}"
+RESULT_FILE="${OUT_DIR}/${CHILD_ID}.md"
 PANE_ID_FILE="${WORK_DIR}/${CHILD_ID}.pane"
 PARENT_ID_FILE="${WORK_DIR}/${CHILD_ID}.parent"
 DEPTH_FILE="${WORK_DIR}/${CHILD_ID}.depth"
-PARENT_ID="${CCORCH_PARENT_ID:-}"
-DRY_RUN="${CCORCH_DRY_RUN:-}"
 LOCK_DIR="${WORK_DIR}/.lock.d"
 LOCK_HELD=""
 WATCHDOG_PID=""   # set only when the watchdog starts; never inherited from the environment
+# A Main Brain's result also goes to result.md, where the user's session reads it.
+COPY_RESULT=""
+if [ "$DEPTH" = "1" ] && [ -z "$PARENT_ID" ]; then
+  COPY_RESULT=1
+fi
 
+read_pid() { # read_pid <file> — prints the file's content if it is all digits, else nothing
+  local v
+  v="$(cat "$1" 2>/dev/null || true)"
+  case "$v" in
+    ''|*[!0-9]*) ;;
+    *) printf '%s' "$v" ;;
+  esac
+}
+
+# release_lock removes the lock only if this process owns it.
 release_lock() {
   if [ -n "$LOCK_HELD" ]; then
-    rmdir "$LOCK_DIR" 2>/dev/null || true
+    if [ "$(read_pid "${LOCK_DIR}/owner")" = "$$" ]; then
+      rm -f "${LOCK_DIR}/owner"
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
     LOCK_HELD=""
   fi
 }
 
 # --- Signal guarantee via trap ---
-# The trap must exist before the start gate so that a refusal reaches the parent.
-# Bash keeps one EXIT trap: anything that must happen on exit, such as releasing the
-# lock, goes through cleanup(), never through a second trap.
+# The trap must exist before the start gate so that a refusal reaches the parent, and
+# before every check that can fail. Bash keeps one EXIT trap: anything that must happen on
+# exit, such as releasing the lock, goes through cleanup(), never through a second trap.
 
 cleanup() {
   release_lock
@@ -94,8 +167,8 @@ cleanup() {
     cat > "${RESULT_FILE}.tmp" <<EOF
 ---
 status: ${fallback_status}
-depth: ${DEPTH}
-task: "$(echo "$TASK" | head -c 100)"
+depth: ${DEPTH_FM}
+task: "${TASK_FM}"
 completed: $(date -Iseconds)
 ---
 
@@ -104,6 +177,13 @@ completed: $(date -Iseconds)
 ${fallback_body}
 EOF
     mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
+  fi
+
+  # The Main Brain's result reaches the user's session even when it ended without writing
+  # result.md (refused, error, incomplete, timeout). WORK_DIR is new for each session, so
+  # writing it when absent is enough.
+  if [ -n "$COPY_RESULT" ] && [ ! -e "${OUT_DIR}/result.md" ] && [ -f "$RESULT_FILE" ]; then
+    cp "$RESULT_FILE" "${OUT_DIR}/result.md.tmp" && mv "${OUT_DIR}/result.md.tmp" "${OUT_DIR}/result.md" || true
   fi
 
   # Always signal parent (a dry run must not touch a live channel)
@@ -119,7 +199,7 @@ EOF
 trap cleanup EXIT
 
 # --- Start gate ---
-# Computed refusal before claude starts. It checks that the limits are sane, that the
+# Computed refusal before claude starts. It checks that the inputs are sane, that the
 # depth is 1-3 and follows from the parent's recorded depth, that the live ccorch panes
 # stay within MAX_PANES, and that the live siblings under one parent stay within the
 # per-depth children limit. Limits are enforced here, not by prompt text.
@@ -129,35 +209,55 @@ trap cleanup EXIT
 # can still escape it. Against that, the boundary is the auto-mode classifier.
 
 refuse() {
-  local reason="$1"
+  local REASON_FM
+  sanitize_to REASON_FM 200 "$1"
   cat > "${RESULT_FILE}.tmp" <<EOF
 ---
 status: refused
-depth: ${DEPTH}
-reason: "${reason}"
-task: "$(echo "$TASK" | head -c 100)"
+depth: ${DEPTH_FM}
+reason: "${REASON_FM}"
+task: "${TASK_FM}"
 completed: $(date -Iseconds)
 ---
 
 # Refused
 
-${reason}
+${REASON_FM}
 EOF
   mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
-  echo "ccorch: refused: ${reason}" >&2
+  echo "ccorch: refused: ${REASON_FM}" >&2
   if [ -n "$DRY_RUN" ]; then
-    echo "gate: refused: ${reason}"
+    echo "gate: refused: ${REASON_FM}"
   fi
   exit 1
 }
 
-# Fail closed: a limit that is not a positive integer would make every comparison
-# below meaningless.
+if [ -z "$TASK_GIVEN" ]; then
+  refuse "usage: ccorch-wrapper.sh '<task description>' (the task argument is missing)"
+fi
+if [ -z "$SESSION_ID" ]; then
+  refuse "CCORCH_SESSION_ID is required"
+fi
+if [ -z "$PROJECT_DIR" ]; then
+  refuse "CCORCH_PROJECT_DIR is required"
+fi
+
+# Resolve the directory where this script lives (for child pane references)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Change to the user's project directory — all agents must run in the same context
+if [ ! -d "$PROJECT_DIR" ] || ! cd "$PROJECT_DIR"; then
+  refuse "CCORCH_PROJECT_DIR is not a directory I can enter: ${PROJECT_DIR}"
+fi
+
+# Fail closed: a limit or timeout that is not a positive integer would make every
+# comparison below meaningless.
 require_positive_int() {
   case "$2" in
     ''|*[!0-9]*|0*) refuse "$1 must be a positive integer (got '$2')" ;;
   esac
 }
+require_positive_int CCORCH_TIMEOUT "$TIMEOUT"
 require_positive_int CCORCH_MAX_PANES "$MAX_PANES"
 require_positive_int CCORCH_MAX_CHILDREN_D1 "$MAX_CHILDREN_D1"
 require_positive_int CCORCH_MAX_CHILDREN_D2 "$MAX_CHILDREN_D2"
@@ -167,19 +267,48 @@ case "$DEPTH" in
   *) refuse "CCORCH_DEPTH must be 1, 2 or 3 (got '${DEPTH}')" ;;
 esac
 
-# Lock: mkdir is atomic and portable (flock is util-linux only). Held from counting until
-# the records are written, so simultaneous starts cannot both pass. A lock directory
-# older than a minute is treated as stale and removed once.
+# Lock: mkdir is atomic and portable (flock is util-linux only). It is held from counting
+# until the records are written, so simultaneous starts cannot both pass. A dry run takes
+# no lock: it records nothing, so a race does not matter.
+#
+# The holder writes its PID to $LOCK_DIR/owner. A lock is stale when its owner is dead, or
+# when it has no (valid) owner file and is older than a minute (the holder died between
+# the mkdir and the write). A stale lock is removed by renaming it, which is atomic, so
+# only one waiter wins; the renamed lock's owner is then checked again, because between
+# the check and the rename another waiter may have replaced the lock with a live one, and
+# that one is put back. A bounded wait (10 s) ends in a refusal.
+# (-mmin takes whole minutes: BSD and bfs find reject a fractional value.)
 acquire_lock() {
-  local tries=0 stale_cleared=""
+  local tries=0 attempts=0 owner stale d after
   while :; do
     if mkdir "$LOCK_DIR" 2>/dev/null; then
       LOCK_HELD=1
+      printf '%s\n' "$$" > "${LOCK_DIR}/owner" 2>/dev/null || true
       return 0
     fi
-    if [ -z "$stale_cleared" ] && [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-      stale_cleared=1
-      rmdir "$LOCK_DIR" 2>/dev/null || true
+    owner="$(read_pid "${LOCK_DIR}/owner")"
+    stale=""
+    if [ -n "$owner" ]; then
+      kill -0 "$owner" 2>/dev/null || stale=1
+    elif [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      stale=1
+    fi
+    if [ -n "$stale" ]; then
+      attempts=$((attempts + 1))
+      if [ "$attempts" -gt 50 ]; then
+        return 2
+      fi
+      d="${LOCK_DIR}.stale.$$.${attempts}"
+      if mv "$LOCK_DIR" "$d" 2>/dev/null; then
+        after="$(read_pid "${d}/owner")"
+        if [ -n "$after" ] && [ "$after" != "$owner" ] && kill -0 "$after" 2>/dev/null; then
+          # We renamed a live lock that replaced the stale one: put it back.
+          mv "$d" "$LOCK_DIR" 2>/dev/null || return 2
+        else
+          rm -f "${d}/owner"
+          rmdir "$d" 2>/dev/null || true
+        fi
+      fi
       continue
     fi
     tries=$((tries + 1))
@@ -189,9 +318,23 @@ acquire_lock() {
     sleep 0.1
   done
 }
-acquire_lock || refuse "lock timeout: could not take ${LOCK_DIR} within 10s"
+if [ -z "$DRY_RUN" ]; then
+  lock_rc=0
+  acquire_lock || lock_rc=$?
+  case "$lock_rc" in
+    0) ;;
+    2) refuse "lock contention: could not take ${LOCK_DIR}" ;;
+    *) refuse "lock timeout: could not take ${LOCK_DIR} within 10s" ;;
+  esac
+fi
 
-CURRENT_PANE_ID=$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)
+# This pane's id: $TMUX_PANE names the pane this process runs in; plain display-message
+# would report the pane that is active in the session.
+if [ -n "${TMUX_PANE:-}" ]; then
+  CURRENT_PANE_ID="$(tmux display-message -p -t "$TMUX_PANE" '#{pane_id}' 2>/dev/null || true)"
+else
+  CURRENT_PANE_ID="$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)"
+fi
 
 # Fail closed: without the pane list every recorded pane would look dead.
 if ! LIVE_PANES=$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null); then
@@ -207,6 +350,13 @@ is_live() {
   esac
 }
 
+if [ -z "$CURRENT_PANE_ID" ]; then
+  refuse "cannot determine this pane's tmux id; is this running in tmux?"
+fi
+if ! is_live "$CURRENT_PANE_ID"; then
+  refuse "this pane (${CURRENT_PANE_ID}) is not in the tmux pane list"
+fi
+
 # Depth is derived from the parent's recorded depth, not taken from the environment.
 # Initialized here so that an inherited DERIVED_DEPTH cannot set it.
 DERIVED_DEPTH=1
@@ -221,10 +371,14 @@ if [ -z "$PARENT_ID" ]; then
     other_pane=$(cat "${depth_file%.depth}.pane" 2>/dev/null || true)
     [ "$other_pane" != "$CURRENT_PANE_ID" ] || continue
     if is_live "$other_pane"; then
+      # This work directory belongs to the Main Brain that is running: do not write
+      # result.md into it.
+      COPY_RESULT=""
       refuse "a Main Brain is already running in this session (pane ${other_pane})"
     fi
   done
 else
+  COPY_RESULT=""
   case "$PARENT_ID" in
     *[!A-Za-z0-9_-]*) refuse "CCORCH_PARENT_ID contains characters other than letters, digits, '-' and '_'" ;;
   esac
@@ -281,7 +435,7 @@ if [ "$DEPTH" -ge 2 ]; then
 fi
 
 # Records are written only for a real start: a dry run decides but leaves no trace in a
-# live session. The lock is released here either way, before any subshell or claude starts.
+# live session. The lock is released here, before any subshell or claude starts.
 if [ -z "$DRY_RUN" ]; then
   echo "$CURRENT_PANE_ID" > "$PANE_ID_FILE"
   echo "$DEPTH" > "$DEPTH_FILE"
@@ -293,7 +447,8 @@ release_lock
 
 # Set descriptive pane title based on depth
 if [ -z "$DRY_RUN" ]; then
-  TASK_SHORT="$(echo "$TASK" | head -c 40 | tr '\n' ' ')"
+  TASK_SHORT="${TASK:0:40}"
+  TASK_SHORT="${TASK_SHORT//$'\n'/ }"
   case "$DEPTH" in
     1) PANE_TITLE="[Main] ${TASK_SHORT}" ;;
     2) PANE_TITLE="[Child] ${TASK_SHORT}" ;;
@@ -302,16 +457,20 @@ if [ -z "$DRY_RUN" ]; then
   tmux select-pane -t "$CURRENT_PANE_ID" -T "$PANE_TITLE" 2>/dev/null || true
 fi
 
+# The directories the rest of the script, the Stop hook and claude see are the resolved ones.
+CCORCH_WORK_DIR="$WORK_DIR"
+CCORCH_PROJECT_DIR="$PROJECT_DIR"
+
 # --- Status dashboard ---
 
-STATUS_FILE="${WORK_DIR}/status.md"
+STATUS_FILE="${OUT_DIR}/status.md"
 
-# Initialize status dashboard for Main Brain (not in a dry run: it would overwrite a live one)
-if [ "$DEPTH" -eq 1 ] && [ -z "$DRY_RUN" ]; then
+# Initialize status dashboard for Main Brain
+if [ "$DEPTH" -eq 1 ]; then
   cat > "${STATUS_FILE}.tmp" <<EOF
 # Orchestration Status
 
-**Task**: $(echo "$TASK" | head -c 200)
+**Task**: ${TASK:0:200}
 **Started**: $(date -Iseconds)
 **Status**: running
 
@@ -516,18 +675,25 @@ CURRENT_PANE="$CURRENT_PANE_ID"
 DENY_RULES=(
   'Bash(rm -rf *)'
   'Bash(rm -fr *)'
+  'Bash(rm -Rf *)'
   'Bash(rm -r -f *)'
   'Bash(rm -f -r *)'
+  'Bash(rm -r --force *)'
+  'Bash(rm --recursive *)'
   'Bash(git push --force *)'
   'Bash(git push *--force*)'
   'Bash(git push -f *)'
+  'Bash(git push * -f*)'
   'Bash(git push * +*)'
+  'Bash(git push *--delete*)'
+  'Bash(git push * :*)'
+  'Bash(git branch -D *)'
   'Bash(git reset --hard *)'
   'Bash(git clean *)'
   'Bash(sudo *)'
 )
 if [ "$DEPTH" -ge 2 ]; then
-  DENY_RULES+=('Bash(git push *)')   # only the Main Brain pushes
+  DENY_RULES+=('Bash(git push *)' 'Bash(git -C * push*)')   # only the Main Brain pushes
 fi
 if [ "$DEPTH" -ge 3 ]; then
   DENY_RULES+=('Agent' 'Bash(tmux *)')
@@ -542,7 +708,7 @@ CLAUDE_CMD=(
 
 # Dry run: the gate has passed; show what would start, then stop.
 if [ -n "$DRY_RUN" ]; then
-  printf '%s' "$SYSTEM_PROMPT" > "${WORK_DIR}/${CHILD_ID}.dry-run.system-prompt"
+  printf '%s' "$SYSTEM_PROMPT" > "${OUT_DIR}/${CHILD_ID}.dry-run.system-prompt"
   echo "gate: ok"
   printf 'argv: %q\n' "${CLAUDE_CMD[@]}"
   exit 0
@@ -563,8 +729,8 @@ printf '%s' "$TASK" > "$TASK_FILE"
     cat > "${RESULT_FILE}.tmp" <<EOF
 ---
 status: timeout
-depth: ${DEPTH}
-task: "$(echo "$TASK" | head -c 100)"
+depth: ${DEPTH_FM}
+task: "${TASK_FM}"
 completed: $(date -Iseconds)
 ---
 
@@ -623,9 +789,9 @@ if [ ! -f "$RESULT_FILE" ]; then
   cat > "${RESULT_FILE}.tmp" <<EOF
 ---
 status: ${FALLBACK_STATUS}
-depth: ${DEPTH}
+depth: ${DEPTH_FM}
 exit_code: ${CLAUDE_RC}
-task: "$(echo "$TASK" | head -c 100)"
+task: "${TASK_FM}"
 completed: $(date -Iseconds)
 ---
 

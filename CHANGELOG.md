@@ -41,13 +41,34 @@ mode ([DEC-006](docs/sdd/design/decisions/DEC-006.md), fixes #9).
 
 - If `claude` exits without writing a result file, the result is `status: error` with the
   exit code (non-zero exit) or `status: incomplete` (exit 0), not `status: success`.
-- The deny list also covers `rm -fr`, `rm -r -f`, `rm -f -r`, `git push` with `--force`
-  anywhere (including `--force-with-lease`) and `git push` with a `+refspec`.
+- The deny list gains more of the common forms: `rm -fr`, `rm -r -f`, `rm -f -r`, `git push` with
+  `--force` in any position (which includes `--force-with-lease`) and with a `+refspec`.
 - A dry run writes no `.pane`, `.parent` or `.depth` record and leaves `status.md` alone;
-  its prompt file is `<id>.dry-run.system-prompt`.
+  its prompt file is `<id>.dry-run.system-prompt` (see round 2 for where it goes now).
 - The Main Brain's cleanup steps no longer delete every `.pane` file, which removed its own
   record, and `CHILD_ID` no longer depends on GNU `date +%N`.
 - The system prompt and docs no longer present the Bash deny rules as hard limits.
+
+### Review round 2
+
+- The trap is installed before every check that can fail: a missing task argument, a bad
+  `CCORCH_PROJECT_DIR` or a bad number is now a `status: refused` result with a signal.
+  Only a missing `CCORCH_WORK_DIR` or `CCORCH_PARENT_CHANNEL` exits with a message (status 2).
+  `WORK_DIR` and `PROJECT_DIR` are made absolute before any `cd`. `CCORCH_TIMEOUT` is validated.
+- The pane id comes from `$TMUX_PANE`; an empty id or one not in `tmux list-panes` is refused.
+- The lock records its owner's PID. It is stale when the owner is dead, or has no owner file and
+  is over a minute old, and is removed by an atomic rename that re-checks the owner. It is
+  released only by its owner, and by `cleanup()`.
+- A Main Brain's result is copied to `result.md` when it wrote none, so a refusal is visible
+  to the `/ccor` skill. The skill's error table says so.
+- Dry runs write nothing in the live session: they print `out_dir: <temp dir>` and write the
+  result, `status.md` and the prompt dump there, and take no lock.
+- Front-matter values are sanitized to one line, so a value cannot add a second `status:` line.
+- Pipelines on the task text (`echo | head`) are parameter expansions, so a large task cannot
+  trip `pipefail` through SIGPIPE.
+- More deny rules: `rm -Rf`, `rm -r --force`, `rm --recursive`, `git push` with `-f` in any
+  position, `--delete` or a `:refspec`, `git branch -D`, and `git -C ... push` at depth 2 and 3.
+  They are the common forms; DEC-006 lists the known gaps.
 
 ## 0.5.0 — 2026-10-04
 

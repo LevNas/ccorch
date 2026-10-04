@@ -32,34 +32,35 @@ ccorch-wrapper.sh <task_description>
 
 ## Script Flow
 
-1. Validate inputs; create `$WORK_DIR`; `cd` to the project directory.
-2. Generate `CHILD_ID` (`depth<N>-<PID>-<RANDOM>`), `RESULT_FILE`, and install `trap cleanup EXIT`. The trap must exist before the gate so a refusal reaches the parent. It is the only EXIT trap: it also releases the lock.
-3. **Start gate** (see [DEC-006](../decisions/DEC-006.md)):
-   - refuse if `CCORCH_MAX_PANES`, `CCORCH_MAX_CHILDREN_D1` or `CCORCH_MAX_CHILDREN_D2` is not a positive integer, or the claimed depth is not 1, 2 or 3
-   - take the `mkdir` lock `$WORK_DIR/.lock.d` (retry every 0.1 s, 10 s at most, then refuse with "lock timeout"; a lock older than a minute is removed once as stale). It is released by `cleanup()` or earlier by the gate itself, never by a second trap
-   - refuse if `tmux list-panes -a` fails
+1. Check `CCORCH_WORK_DIR` and `CCORCH_PARENT_CHANNEL`. If either is missing, no result file or signal is possible: print to stderr and exit 2. This is the only failure that does not go through a result file.
+2. Resolve `WORK_DIR` and `PROJECT_DIR` to absolute paths against `$PWD` (before any `cd`), create `WORK_DIR` (not in a dry run), read the other variables without `:?`, and compute `CHILD_ID` and `RESULT_FILE`. In a dry run, `OUT_DIR` is a fresh `mktemp -d` printed on the first line (`out_dir: <path>`); otherwise `OUT_DIR` is `WORK_DIR`. Every write of the process (result file, `status.md`, `result.md`, prompt dump) goes to `OUT_DIR`.
+3. Install `trap cleanup EXIT`. This comes before every check that can fail, so a missing task argument, a bad `PROJECT_DIR` or a bad number is a `status: refused` result with a signal, not a silent exit. The trap is the only EXIT trap: it releases the lock, writes the fallback result, copies a Main Brain's result to `result.md` when that is absent, and signals the parent. Front-matter values (`depth:`, `task:`, `reason:`) are sanitized to one line.
+4. **Start gate** (see [DEC-006](../decisions/DEC-006.md)):
+   - refuse if the task, `CCORCH_SESSION_ID` or `CCORCH_PROJECT_DIR` is missing, if `PROJECT_DIR` cannot be entered, if `CCORCH_TIMEOUT`, `CCORCH_MAX_PANES`, `CCORCH_MAX_CHILDREN_D1` or `CCORCH_MAX_CHILDREN_D2` is not a positive integer, or if the claimed depth is not 1, 2 or 3
+   - take the `mkdir` lock `$WORK_DIR/.lock.d` (not in a dry run: it records nothing). The holder writes its PID to `.lock.d/owner`. A lock is stale when the owner is dead (`kill -0` fails), or when it has no valid owner file and is more than a minute old. A stale lock is renamed away (atomic, so one waiter wins) and the renamed lock's owner is checked again; a live lock that replaced the stale one is put back. The wait is bounded (10 s, then "lock timeout"). `release_lock` removes the lock only if `owner` holds this PID
+   - read the pane id with `tmux display-message -p -t "$TMUX_PANE"` (plain `display-message` only if `TMUX_PANE` is unset); refuse if it is empty or not in `tmux list-panes -a`, and refuse if that command fails
    - **derive the depth**: with no `CCORCH_PARENT_ID` the claimed depth must be 1 and no other live depth-1 record may exist in `$WORK_DIR`; with a parent, require its `<id>.pane` and `<id>.depth` records (depth 1 or 2) and a live parent pane, and refuse if `CCORCH_DEPTH` is not the parent's depth plus 1 (the reason names both). The effective depth drives the deny list, the children limit and the prompt
    - count live recorded panes (`*.pane` compared with the `list-panes` output, current pane excluded); refuse if the count plus this pane exceeds `CCORCH_MAX_PANES`
    - at depth 2 and 3, count live siblings with the same `CCORCH_PARENT_ID` (paired through `<id>.parent`); refuse if the count plus this pane exceeds `CCORCH_MAX_CHILDREN_D1` (depth 2) or `_D2` (depth 3)
    - write `<id>.pane`, `<id>.depth` and `<id>.parent` (not in a dry run), release the lock
    - a refusal writes `status: refused` with a `reason:` line to the result file and exits 1; the trap signals the parent
-4. Set the pane title; write the status dashboard (depth 1, not in a dry run); build the system prompt.
-5. Build the `claude` argv: `--permission-mode auto`, `--disallowedTools` with one rule per element, `--append-system-prompt`.
-6. Dry run: write the prompt to `$WORK_DIR/<id>.dry-run.system-prompt`, print `gate: ok` and the argv, exit 0. The trap writes `status: dry-run` and does not signal. The gate ran as usual, including the lock, but wrote no records.
-7. Write the task file, start the watchdog and the task delivery subshell, run `claude` interactively and keep its exit status.
-8. After `claude` exits: stop the watchdog. If no result file exists, write `status: error` with the exit code when it was non-zero, and `status: incomplete` when it was 0 (never `success`). The trap signals the parent.
+5. Set the pane title; write the status dashboard (depth 1); build the system prompt.
+6. Build the `claude` argv: `--permission-mode auto`, `--disallowedTools` with one rule per element, `--append-system-prompt`.
+7. Dry run: write the prompt to `$OUT_DIR/<id>.dry-run.system-prompt`, print `gate: ok` and the argv, exit 0. The trap writes `status: dry-run` into `OUT_DIR` and does not signal. The live `WORK_DIR` is only read: no lock, no records, no new files.
+8. Write the task file, start the watchdog and the task delivery subshell, run `claude` interactively and keep its exit status.
+9. After `claude` exits: stop the watchdog. If no result file exists, write `status: error` with the exit code when it was non-zero, and `status: incomplete` when it was 0 (never `success`). The trap signals the parent.
 
 ## Tool Flags
 
 | Flag | Value |
 |------|-------|
 | `--permission-mode` | `auto` at every depth |
-| `--disallowedTools`, every depth | `Bash(rm -rf *)` `Bash(rm -fr *)` `Bash(rm -r -f *)` `Bash(rm -f -r *)` `Bash(git push --force *)` `Bash(git push *--force*)` `Bash(git push -f *)` `Bash(git push * +*)` `Bash(git reset --hard *)` `Bash(git clean *)` `Bash(sudo *)` |
-| `--disallowedTools`, depth 2 and 3 | adds `Bash(git push *)` |
+| `--disallowedTools`, every depth | `Bash(rm -rf *)` `Bash(rm -fr *)` `Bash(rm -Rf *)` `Bash(rm -r -f *)` `Bash(rm -f -r *)` `Bash(rm -r --force *)` `Bash(rm --recursive *)` `Bash(git push --force *)` `Bash(git push *--force*)` `Bash(git push -f *)` `Bash(git push * -f*)` `Bash(git push * +*)` `Bash(git push *--delete*)` `Bash(git push * :*)` `Bash(git branch -D *)` `Bash(git reset --hard *)` `Bash(git clean *)` `Bash(sudo *)` |
+| `--disallowedTools`, depth 2 and 3 | adds `Bash(git push *)` and `Bash(git -C * push*)` |
 | `--disallowedTools`, depth 3 | adds `Agent` and `Bash(tmux *)` |
 | `--append-system-prompt` | the generated prompt |
 
-`--dangerously-skip-permissions` and `--allowedTools` are not passed: under the bypass, allow rules have no effect. The Bash deny rules cover the usual command form only and are not a security boundary; the boundaries are the auto-mode classifier and the start gate. Both pane-creation templates in the system prompt pass `CCORCH_MAX_PANES`, `CCORCH_MAX_CHILDREN_D1`, `CCORCH_MAX_CHILDREN_D2` and `CCORCH_PARENT_ID`, because a pane created by `tmux split-pane` gets its environment from the tmux server.
+`--dangerously-skip-permissions` and `--allowedTools` are not passed: under the bypass, allow rules have no effect. The Bash deny rules cover the common forms only and are not a security boundary (The rules are the common forms, not a closed list. Known gaps: other flag spellings and orderings, full paths (`/bin/rm`), `sh -c '...'`, aliases and wrapper scripts, and any command that reaches the same effect another way.); the boundaries are the auto-mode classifier and the start gate. Both pane-creation templates in the system prompt pass `CCORCH_MAX_PANES`, `CCORCH_MAX_CHILDREN_D1`, `CCORCH_MAX_CHILDREN_D2` and `CCORCH_PARENT_ID`, because a pane created by `tmux split-pane` gets its environment from the tmux server.
 
 ## Key Design Decisions
 
