@@ -107,9 +107,11 @@ not only when the pane is done. Since 0.6.1 the two kinds of parent are treated 
   `CCORCH_TIMEOUT` as their parent and start later, so the parent's own timeout would end
   it before a silent child's timeout could report.
 - A pane started by an older wrapper has no `CCORCH_RESULT_FILE` and signals on every Stop.
-- The wrapper's `cleanup()` copies the result to `result.md` when `result.md` is absent or
-  its content differs from the result file (`cmp`, not mtime, so a rewrite within the same
-  second is not missed). A result rewritten after the last Stop, or a refusal, error or
+- The wrapper's `cleanup()` copies the result to `result.md` when `result.md` is absent, or
+  when this wrapper ran `claude` and the content differs from the result file (`cmp`, not
+  mtime, so a rewrite within the same second is not missed). A wrapper refused before
+  `claude` started never replaces an existing `result.md`, which may be another Main
+  Brain's result. A result rewritten after the last Stop, or a refusal, error or
   timeout result, still reaches it. The hook and `cleanup()` stage the copy through
   per-process temporary names, so they cannot interleave.
 - An empty result file counts as no result everywhere: the hook, the watchdog and
