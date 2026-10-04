@@ -43,7 +43,7 @@ ccorch is a tmux-based orchestration plugin for Claude Code. Running the `/ccor`
 ## Dependencies
 
 - **tmux** 1.8+: Required for `wait-for` command support
-- **Claude Code CLI**: Requires `--dangerously-skip-permissions`, `--allowedTools`, `--append-system-prompt`, `-p` flags
+- **Claude Code CLI**: Requires `--dangerously-skip-permissions`, `--allowedTools`, `--append-system-prompt` flags (interactive launch; the task is delivered with tmux `paste-buffer`)
 - **ccmemo** (optional): Integration features activate only when installed
 
 ## Out of Scope
@@ -52,7 +52,7 @@ ccorch is a tmux-based orchestration plugin for Claude Code. Running the `/ccor`
 - Non-tmux terminal multiplexer support (zellij, screen, etc.)
 - Depth beyond 3 levels
 - Cross-machine remote orchestration
-- Interactive mode for child panes (`-p` one-shot only)
+- Headless one-shot workers for child panes (panes run interactively; see the billing constraint in DEC-004)
 
 ---
 
