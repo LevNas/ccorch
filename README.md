@@ -72,10 +72,8 @@ Your Session ──► Main Brain (DEPTH=1)
 
 ### Safety
 
-- **Permissions are bypassed**: the wrapper starts every pane with `--dangerously-skip-permissions` (`claude --help`: "Bypass all permission checks")
-- **Allowlist (`--allowedTools`)**: DEPTH 1 and 2 get `Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent`; DEPTH 3 gets the same list without `tmux:*` and `Agent`. `claude --help` documents the flag as a list of tool names to allow. Whether it restricts anything while permissions are bypassed is **not verified**
-- **Depth limit**: `--disallowedTools "Agent"` (DEPTH 3 only) denies the subagent tool. Panes are created with `tmux split-pane` through Bash, so this flag does not address pane creation. At DEPTH 3, pane creation is held back only by leaving `tmux:*` out of the Bash allowlist (not verified under `--dangerously-skip-permissions`) and by the system prompt.
-- **Prompt guard rails for destructive commands**: `git push --force`, `git reset --hard`, `branch -D` and `rm -rf` are forbidden only in each pane's system prompt (`--append-system-prompt`); no flag blocks them
+- **Permissions are bypassed**: every pane starts with `--dangerously-skip-permissions`. Whether the `--allowedTools` / `--disallowedTools` flags restrict anything under it is unverified; [NFR-SEC-003](docs/sdd/requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention) has the details
+- **Guard rails**: destructive commands (`git push --force`, `git reset --hard`, `branch -D`, `rm -rf`) and pane creation at DEPTH 3 are forbidden in each pane's system prompt (`--append-system-prompt`); no verified flag blocks them
 - **Timeout**: Panes auto-terminate after configurable timeout (default: 600s)
 
 ## Configuration
@@ -99,7 +97,7 @@ later is installed, it provides the moved parts:
 | `/ccor-parallel` | `/ccharness:parallel-worktree` (cleanup only through worktree-sweep) |
 | Catalog tier guard (`agent_gate.sh`) | ccharness's catalog tier guard |
 | Agent ledger | `<main checkout>/.claude/ccharness/ledger.jsonl` |
-| `url-extract` | Retired, not moved: WebFetch's tool description states that it already answers through a small fast model |
+| `url-extract` | Retired, not moved; see [DEC-005](docs/sdd/design/decisions/DEC-005.md#what-was-retired) |
 
 **Migration**
 
@@ -108,6 +106,7 @@ later is installed, it provides the moved parts:
 - Old ledger: delete `.claude/ccorch/ledger.jsonl` first, and only then drop its
   `.gitignore` line. In the other order, repositories that commit `.claude/`
   see the file appear as untracked.
+- If your repository commits `.claude/`, ignore `.claude/ccharness/` as well.
 - Environment variables `CCORCH_GATE`, `CCORCH_MODEL_GUARD` and
   `CCORCH_MAX_PARALLEL` no longer exist.
 

@@ -5,10 +5,10 @@
 
 ## Explicitly Specified Information
 
-- [x] Technology: tmux (wait-for signaling), Claude Code CLI (`-p`, `--allowedTools`, `--append-system-prompt`)
+- [x] Technology: tmux (wait-for signaling), Claude Code CLI (interactive, `--allowedTools`, `--append-system-prompt`)
 - [x] Architecture: 3-level tmux pane hierarchy with environment variable depth propagation
 - [x] Communication: `tmux wait-for` signals + file-based data exchange (`/tmp/ccorch/`)
-- [x] Safety: system prompt guard rails per depth, plus `--allowedTools` / `--disallowedTools` flags. The wrapper also passes `--dangerously-skip-permissions`; whether the flags restrict anything under that bypass is not verified (see Security Considerations)
+- [x] Safety: system prompt guard rails per depth, plus `--allowedTools` / `--disallowedTools` flags. The wrapper also passes `--dangerously-skip-permissions` (see Security Considerations)
 - [x] Plugin format: Claude Code plugin (`.claude-plugin/plugin.json`, skills, hooks)
 - [x] Distribution: claudecode-plugins marketplace
 
@@ -85,29 +85,22 @@ What the wrapper passes (`scripts/ccorch-wrapper.sh`), and what `claude --help` 
 | `--disallowedTools` | not passed | `"Agent"` | list of tool names "to deny" |
 | `--append-system-prompt` | yes | yes | appends a system prompt |
 
-The help text does not say whether `--allowedTools` or `--disallowedTools` restrict anything while permissions are bypassed: **not verified**. The allowlists at DEPTH 1 and 2 are identical. The Bash patterns are not a verified block on destructive commands; the only stated ban on them is the system prompt. The wrapper writes the Bash patterns with commas inside the parentheses and a colon syntax, while the help text example is `"Bash(git *) Edit"`: how the patterns are parsed is also not verified. `--disallowedTools "Agent"` denies the subagent tool; panes are created through `tmux split-pane` via Bash, so it does not address pane creation. The blocks below show the intended flags per depth.
+What these flags restrict under the permission bypass is unverified; see [NFR-SEC-003](../requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention).
 
-Intended flags per depth (DEPTH 1 and 2 are identical; only DEPTH 3 differs; see the table above for what is verified):
+What the wrapper runs (interactive Claude Code; the task is not passed with `-p`):
 
 ```bash
-# DEPTH=1 (Main Brain) — intended flags; the table above says what is verified
+# DEPTH 1 and 2
 claude --dangerously-skip-permissions \
   --allowedTools "Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent" \
-  --append-system-prompt "You are CCORCH Main Brain (DEPTH=1)..." \
-  -p "$TASK"
+  --append-system-prompt "$SYSTEM_PROMPT"
 
-# DEPTH=2 (Child)
-claude --dangerously-skip-permissions \
-  --allowedTools "Read Edit Write Bash(git:status,git:diff,git:add,git:commit,tmux:*) Grep Glob Agent" \
-  --append-system-prompt "You are CCORCH Child (DEPTH=2)..." \
-  -p "$TASK"
+# DEPTH 3: same, with the allowlist "Read Edit Write Bash(git:status,git:diff,git:add,git:commit) Grep Glob"
+# and one more flag
+  --disallowedTools "Agent"
 
-# DEPTH=3 (Grandchild)
-claude --dangerously-skip-permissions \
-  --allowedTools "Read Edit Write Bash(git:status,git:diff,git:add,git:commit) Grep Glob" \
-  --disallowedTools "Agent" \
-  --append-system-prompt "You are CCORCH Grandchild (DEPTH=3). Do NOT create new panes..." \
-  -p "$TASK"
+# Task delivery, started in the background before claude launches:
+sleep 3; tmux load-buffer "$TASK_FILE"; tmux paste-buffer -t "$CURRENT_PANE"; sleep 0.5; tmux send-keys -t "$CURRENT_PANE" Enter
 ```
 
 ### Guard Rail System Prompts
@@ -167,12 +160,17 @@ mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
 ```
 ccorch/
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin metadata (v0.1.0)
+│   └── plugin.json              # Plugin metadata (v0.5.0)
+├── hooks/
+│   ├── hooks.json               # Stop hook registration
+│   └── stop_signal.sh           # Signals the parent pane on Stop
 ├── skills/
 │   └── ccor/
 │       └── SKILL.md             # Skill definition
 ├── scripts/
 │   └── ccorch-wrapper.sh        # Child pane wrapper script
+├── docs/                        # Getting-started guides, sdd/
+├── CHANGELOG.md                 # Release notes
 ├── LICENSE                      # MIT
 └── README.md                    # Installation & usage
 ```

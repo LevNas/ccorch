@@ -23,13 +23,14 @@ If ccharness 0.9.0 is installed:
 - `/ccor-parallel` → `/ccharness:parallel-worktree`
 - tier guard and ledger → ccharness; the ledger is now
   `<main checkout>/.claude/ccharness/ledger.jsonl`
-- `url-extract` is retired, not moved: WebFetch's tool description states that
-  it already answers through a small fast model
+- `url-extract` is retired, not moved; see [DEC-005](docs/sdd/design/decisions/DEC-005.md#what-was-retired)
 
 ### Migration
 
 - Replace `ccorch:<type>` with `ccharness:<type>` in your own rules and prompts.
 - Replace `/ccor-parallel` with `/ccharness:parallel-worktree`.
-- Old ledger: delete `.claude/ccorch/ledger.jsonl` first, then drop its
-  `.gitignore` line.
+- Old ledger: delete `.claude/ccorch/ledger.jsonl` first, and only then drop its
+  `.gitignore` line. In the other order, repositories that commit `.claude/`
+  see the file appear as untracked.
+- If your repository commits `.claude/`, ignore `.claude/ccharness/` as well.
 - `/ccor` is unchanged.
