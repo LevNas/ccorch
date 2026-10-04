@@ -42,6 +42,8 @@ WORK_DIR="/tmp/ccorch/${SESSION_ID}"
 CHANNEL="CCORCH_DONE_${SESSION_ID}"
 TIMEOUT="${CCORCH_TIMEOUT:-600}"
 MAX_PANES="${CCORCH_MAX_PANES:-8}"
+MAX_CHILDREN_D1="${CCORCH_MAX_CHILDREN_D1:-3}"
+MAX_CHILDREN_D2="${CCORCH_MAX_CHILDREN_D2:-2}"
 
 mkdir -p "$WORK_DIR"
 ```
@@ -70,6 +72,8 @@ tmux split-pane -h \
    CCORCH_PROJECT_DIR=${PROJECT_DIR} \
    CCORCH_TIMEOUT=${TIMEOUT} \
    CCORCH_MAX_PANES=${MAX_PANES} \
+   CCORCH_MAX_CHILDREN_D1=${MAX_CHILDREN_D1} \
+   CCORCH_MAX_CHILDREN_D2=${MAX_CHILDREN_D2} \
    bash ${SCRIPT_PATH} '${TASK}'"
 ```
 
@@ -148,9 +152,27 @@ This decision is delegated to the Main Brain based on task analysis.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CCORCH_TIMEOUT` | `600` | Timeout in seconds per pane |
-| `CCORCH_MAX_PANES` | `8` | Maximum total panes per session |
-| `CCORCH_MAX_CHILDREN_D1` | `3` | Max concurrent children for Main Brain |
+| `CCORCH_MAX_PANES` | `8` | Maximum live ccorch panes per session, Main Brain included; your own pane is not counted |
+| `CCORCH_MAX_CHILDREN_D1` | `3` | Max concurrent children for the Main Brain |
 | `CCORCH_MAX_CHILDREN_D2` | `2` | Max concurrent grandchildren per Child |
+| `CCORCH_PARENT_ID` | unset | Set by each pane for the panes it starts; required at depth 2 and 3 |
+| `CCORCH_DRY_RUN` | unset | Run the start gate, print the `claude` arguments, start nothing |
+
+The wrapper enforces the three limits before `claude` starts. A pane started over a limit
+does not run: its result file has `status: refused` and a one-line reason, and the parent is
+signalled as usual. Treat that as the child's result.
+
+## Permissions
+
+Panes start with `--permission-mode auto`, not with a permission bypass. Deny rules apply
+at every depth (`rm -rf`, force push, hard reset, `git clean`, `sudo`); depth 2 and 3 also
+deny `git push`, and depth 3 denies the Agent tool and `tmux`. The Bash deny rules catch
+the usual command form only and are not a security boundary; the boundaries are the
+auto-mode classifier and the start gate.
+
+In auto mode a classifier reviews actions. If it blocks one, the pane may stop and wait:
+a human has to look at that pane and approve or redirect it. When a run is slow, tell the
+user that a pane waiting on a blocked action is a likely reason.
 
 ## Error Handling
 
@@ -161,6 +183,7 @@ This decision is delegated to the Main Brain based on task analysis.
 | Main Brain timeout | Timeout result in result.md |
 | Main Brain crash | Error result written by trap, signal still sent |
 | Child/Grandchild failure | Partial results aggregated by Main Brain |
+| Child over a pane or children limit | `status: refused` with the reason in its result file |
 
 ## Example
 

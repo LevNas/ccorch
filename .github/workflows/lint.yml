@@ -22,3 +22,6 @@ jobs:
 
       - name: Run SKILL.md linter
         run: bash claudecode-plugins/scripts/lint-skills.sh plugin
+
+      - name: Run wrapper tests
+        run: bash plugin/tests/test_wrapper.sh

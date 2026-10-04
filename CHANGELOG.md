@@ -2,6 +2,35 @@
 
 Earlier versions: see the git history.
 
+## 0.6.0 — 2026-10-04
+
+The depth and pane limits are now enforced by the wrapper, and panes run in auto
+mode ([DEC-006](docs/sdd/design/decisions/DEC-006.md), fixes #9).
+
+### Changed
+
+- Panes start with `--permission-mode auto` instead of the permission bypass flag.
+  `--allowedTools` is gone: allow rules have no effect under the bypass.
+  If the auto-mode classifier blocks an action, a pane may wait for a human.
+- `--disallowedTools` is built per depth, one rule per element. Every depth denies
+  `rm -rf`, force push, `git reset --hard`, `git clean` and `sudo`; depth 2 and 3
+  also deny `git push`; depth 3 also denies `Agent` and `Bash(tmux *)`.
+- The two `tmux split-pane` templates pass `CCORCH_MAX_PANES`,
+  `CCORCH_MAX_CHILDREN_D1`, `CCORCH_MAX_CHILDREN_D2` and `CCORCH_PARENT_ID` to
+  child panes. Before, the children limits never reached them.
+
+### Added
+
+- Start gate in `ccorch-wrapper.sh`: refuses a pane (result file `status: refused`
+  with a reason, parent signalled) when the depth is not 1-3, when the live ccorch
+  panes would exceed `CCORCH_MAX_PANES`, or when the live siblings under one parent
+  would exceed `CCORCH_MAX_CHILDREN_D1` / `_D2`. Uses `flock` where available and
+  warns where it is not (macOS).
+- `CCORCH_PARENT_ID` (set by each pane for its children; required at depth 2 and 3)
+  and `CCORCH_DRY_RUN` (run the gate, print the `claude` arguments, start nothing).
+- `tests/test_wrapper.sh`, run in CI.
+- NFR-SEC-001 to 003 are Verified; Bash deny rules are still documented as not a boundary.
+
 ## 0.5.0 — 2026-10-04
 
 ccorch is now pane orchestration only ([DEC-005](docs/sdd/design/decisions/DEC-005.md)).
