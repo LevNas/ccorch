@@ -120,11 +120,13 @@ A pane over a limit does not run; it returns `status: refused` with the reason.
 Panes run in auto mode (`--permission-mode auto`), not with a permission
 bypass. If the auto-mode classifier blocks an action, that pane may wait for
 you: look at the pane, then approve or redirect it. When auto mode is not
-available to the session (a model that does not support it,
-`permissions.disableAutoMode` set to `"disable"`, or auto mode turned off by
-Anthropic), Claude Code starts the pane in Manual mode instead, and the pane
-asks you before most actions. A pane's status bar shows `auto mode on` only
-when auto mode is active. Destructive commands are
+available to the pane's session (a model that does not support it, auto mode
+turned off with the `disableAutoMode` setting, or turned off by Anthropic),
+Claude Code starts the pane in Manual mode instead, and the pane asks you
+before most actions. A pane's status bar shows `auto mode on` only when auto
+mode is active. A pane still waiting when `CCORCH_TIMEOUT` (default 600 s) runs
+out is stopped. The start gate and the deny rules apply in every mode.
+Destructive commands are
 denied by rule in their usual forms, and `git push` is denied in the Child and
 Grandchild panes; these Bash rules cover the usual command form only and are not
 a security boundary.

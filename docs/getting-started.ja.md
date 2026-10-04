@@ -110,8 +110,10 @@ tmux セッションを開始（または接続）し、その中で Claude Code
 ペインは権限バイパスではなく、auto モード（`--permission-mode auto`）で動きます。
 auto モードの分類器が操作をブロックすると、そのペインが人の判断を待つことがあります。
 そのときはペインを確認し、承認するか、指示を出し直してください。
-auto モードが使えないとき（auto モードに対応していないモデル、設定ファイルの `permissions.disableAutoMode` が `"disable"`、Anthropic 側で一時的に止めている場合）は、Claude Code がペインを Manual モードで起動し、ほとんどの操作の前に確認を求めます。
+ペインのセッションで auto モードが使えないとき（auto モードに対応していないモデル、`disableAutoMode` の設定で auto モードを外している、Anthropic 側で一時的に止めている場合）は、Claude Code がペインを Manual モードで起動し、ほとんどの操作の前に確認を求めます。
 auto モードが有効なときだけ、ペインの状態行に `auto mode on` と表示されます。
+確認を待ったまま `CCORCH_TIMEOUT`（既定 600 秒）が過ぎたペインは止められます。
+起動の関門と deny ルールは、どのモードでも効きます。
 破壊的なコマンドの通常の形は deny ルールで拒否され、`git push` は Child と Grandchild のペインで拒否されます。
 これらの Bash ルールは通常のコマンド形だけを捉えるもので、セキュリティ境界ではありません。
 
