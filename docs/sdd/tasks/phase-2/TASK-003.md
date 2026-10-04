@@ -45,7 +45,7 @@ Implement the wrapper script that launches Claude Code in child panes with signa
 ## Testing Notes
 - Test normal completion → result file + signal
 - Test timeout → timeout result + signal + process killed
-- Test crash (kill -9) → error result + signal (via trap)
+- Test crash (kill -9) → error result + signal. Not via the trap, which SIGKILL skips: since 0.6.3 tmux runs the pane's `pane-died` hook (`tests/test_tmux_hook.sh`, private tmux server, fake `claude`)
 - Test DEPTH=3 → `Agent` and `Bash(tmux *)` in `--disallowedTools` (`tests/test_wrapper.sh`, dry run)
 
 ## Related

@@ -2,9 +2,9 @@
 # ccorch-wrapper.sh — Child pane launcher with signal guarantee
 #
 # Launches Claude Code in a child pane with:
-# - trap EXIT for guaranteed signal delivery to parent
+# - trap EXIT for guaranteed signal delivery to parent, and a tmux pane-died hook for SIGKILL
 # - Timeout watchdog to prevent infinite execution
-# - Atomic result file writes (tmp → mv)
+# - Atomic result file writes (tmp → mv; tmp → ln where a pane may write at the same time)
 # - Start gate: refuses to start when the depth, pane or children limits would be exceeded
 # - Depth-based deny rules; children run in auto mode
 #
@@ -163,6 +163,18 @@ cleanup() {
   set +e
   release_lock
 
+  # Disarm the pane's pane-died hook (see "Signal on SIGKILL, from tmux"): this exit signals
+  # from here. The option goes first, and the hook only if that worked: a hook left with
+  # remain-on-exit off never runs, but remain-on-exit left on without the hook would keep a
+  # dead pane in the user's tmux. If the option stays, the hook closes the pane and signals
+  # once more, which a waiting parent handles.
+  if [ -n "${PANE_HOOK_ARMED:-}" ]; then
+    PANE_HOOK_ARMED=""
+    if tmux set-option -u -p -t "$CURRENT_PANE" remain-on-exit 2>/dev/null; then
+      tmux set-hook -u -p -t "$CURRENT_PANE" pane-died 2>/dev/null || true
+    fi
+  fi
+
   # Kill watchdog if still running
   if [ -n "${WATCHDOG_PID:-}" ]; then
     kill "$WATCHDOG_PID" 2>/dev/null || true
@@ -204,8 +216,15 @@ EOF
      && { [ ! -e "${OUT_DIR}/result.md" ] \
           || { [ -n "$CLAUDE_STARTED" ] && ! cmp -s "$RESULT_FILE" "${OUT_DIR}/result.md"; }; }; then
     local copy_tmp="${OUT_DIR}/result.md.wrapper-$$.tmp"
-    { cp "$RESULT_FILE" "$copy_tmp" && mv "$copy_tmp" "${OUT_DIR}/result.md"; } 2>/dev/null \
-      || rm -f "$copy_tmp" 2>/dev/null
+    if ! { cp "$RESULT_FILE" "$copy_tmp" && mv "$copy_tmp" "${OUT_DIR}/result.md"; } 2>/dev/null; then
+      rm -f "$copy_tmp" 2>/dev/null
+      # The copy failed. An older result.md would be read as this result: remove it, so the
+      # user's session finds none and, the Main Brain's pane being gone, stops waiting.
+      if [ -n "$CLAUDE_STARTED" ] && [ -e "${OUT_DIR}/result.md" ] \
+         && ! cmp -s "$RESULT_FILE" "${OUT_DIR}/result.md"; then
+        rm -f "${OUT_DIR}/result.md" 2>/dev/null
+      fi
+    fi
   fi
 
   # Always signal parent, last (a dry run must not touch a live channel)
@@ -263,6 +282,9 @@ fi
 
 # Resolve the directory where this script lives (for child pane references)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! . "${SCRIPT_DIR}/ccorch-lib.sh"; then
+  refuse "cannot load ${SCRIPT_DIR}/ccorch-lib.sh"
+fi
 
 # Change to the user's project directory — all agents must run in the same context
 if [ ! -d "$PROJECT_DIR" ] || ! cd "$PROJECT_DIR"; then
@@ -713,6 +735,38 @@ if [ -n "$DRY_RUN" ]; then
   exit 0
 fi
 
+# --- Signal on SIGKILL, from tmux ---
+# A wrapper killed with SIGKILL runs no trap: no result and no signal, and its parent would
+# wait until its own timeout. tmux can do both for it. With remain-on-exit on, the pane
+# outlives its program, so a pane-level pane-died hook runs: it writes an error result
+# unless the pane left one (ccorch-pane-died.sh; run-shell finishes before the next
+# command), signals the parent and closes the pane. pane-exited would not work: a
+# pane-level hook goes away with the pane before it runs. cleanup() removes both, so a
+# normal exit still signals once, from the trap. kill-pane runs no hook, but the wrapper
+# then gets SIGHUP and the trap signals.
+# The values go into a tmux command string, so each must be plain: otherwise no hook, and
+# the wrapper behaves as before 0.6.3. A channel cannot start with "-" (tmux would read it as
+# a flag), a pane id is % and digits, and paths are absolute.
+PANE_HOOK_ARMED=""
+plain_value() { # plain_value <value> <regex for the whole value>, ranges in the C locale
+  local LC_ALL=C
+  [[ "$1" =~ ^$2$ ]]
+}
+if plain_value "$PARENT_CHANNEL" '[A-Za-z0-9_][A-Za-z0-9_-]*' \
+   && plain_value "$CURRENT_PANE" '%[0-9]+' \
+   && plain_value "$SCRIPT_DIR" '/[A-Za-z0-9_./-]*' \
+   && plain_value "$RESULT_FILE" '/[A-Za-z0-9_./-]*' \
+   && plain_value "$OUT_DIR" '/[A-Za-z0-9_./-]*'; then
+  PANE_DIED_CMD="run-shell 'bash ${SCRIPT_DIR}/ccorch-pane-died.sh ${RESULT_FILE} ${OUT_DIR} ${COPY_RESULT:-0} ${DEPTH_LABEL}' ; wait-for -S ${PARENT_CHANNEL} ; kill-pane -t ${CURRENT_PANE}"
+  if tmux set-option -p -t "$CURRENT_PANE" remain-on-exit on 2>/dev/null; then
+    if tmux set-hook -p -t "$CURRENT_PANE" pane-died "$PANE_DIED_CMD" 2>/dev/null; then
+      PANE_HOOK_ARMED=1
+    else
+      tmux set-option -u -p -t "$CURRENT_PANE" remain-on-exit 2>/dev/null || true
+    fi
+  fi
+fi
+
 # --- Write task to file for safe delivery ---
 # Avoids send-keys escaping issues with special characters.
 
@@ -721,12 +775,15 @@ printf '%s' "$TASK" > "$TASK_FILE"
 
 # --- Timeout watchdog ---
 
+# The timeout result is published only if the pane has none (publish_if_absent: no gap
+# between the check and the write), and the pane is stopped only then: a pane that wrote its
+# result just before the timeout keeps it and is not killed.
 (
   sleep "$TIMEOUT"
-  # Only act if no result file yet (task still running)
   if [ ! -s "$RESULT_FILE" ]; then
+    timeout_tmp="${RESULT_FILE}.timeout-$$.tmp"
     {
-      cat > "${RESULT_FILE}.tmp" <<EOF
+      cat > "$timeout_tmp" <<EOF
 ---
 status: timeout
 depth: ${DEPTH_FM}
@@ -739,9 +796,20 @@ completed: $(date -Iseconds)
 Task exceeded ${TIMEOUT}s timeout limit.
 EOF
     } 2>/dev/null || true
-    mv "${RESULT_FILE}.tmp" "$RESULT_FILE" 2>/dev/null || true
-    # Kill the main process group
-    kill 0 2>/dev/null || true
+    # Kill the main process group once the timeout result is in place, or when it could not
+    # even be written (the cleanup then writes an error result) and the pane still has none.
+    if [ -s "$timeout_tmp" ]; then
+      # 0: the timeout result went in; 2: no result, and it could not be put there. Either
+      # way the pane is past its timeout. 1: the pane's own result is there; leave it.
+      pub_rc=0
+      publish_if_absent "$timeout_tmp" "$RESULT_FILE" || pub_rc=$?
+      if [ "$pub_rc" -ne 1 ]; then
+        kill 0 2>/dev/null || true
+      fi
+    elif [ ! -s "$RESULT_FILE" ]; then
+      kill 0 2>/dev/null || true
+    fi
+    rm -f "$timeout_tmp" 2>/dev/null || true
   fi
 ) &
 WATCHDOG_PID=$!

@@ -48,7 +48,7 @@ ccorch-wrapper.sh <task_description>
 5. Set the pane title; write the status dashboard (depth 1); build the system prompt.
 6. Build the `claude` argv: `--add-dir` with `OUT_DIR`, `--permission-mode auto`, `--disallowedTools` with one rule per element, `--append-system-prompt`.
 7. Dry run: write the prompt to `$OUT_DIR/<id>.dry-run.system-prompt`, print `gate: ok` and the argv, exit 0. The trap writes `status: dry-run` into `OUT_DIR` and does not signal. The live `WORK_DIR` is only read: no lock, no records, no new files.
-8. Write the task file, start the watchdog and the task delivery subshell, run `claude` interactively and keep its exit status.
+8. Arm the pane's `pane-died` hook (see "Signal on SIGKILL, from tmux"). Write the task file, start the watchdog and the task delivery subshell, run `claude` interactively and keep its exit status.
 9. After `claude` exits: stop the watchdog. If no result file exists, write `status: error` with the exit code when it was non-zero, and `status: incomplete` when it was 0 (never `success`). The trap signals the parent.
 
 ## Tool Flags
@@ -72,16 +72,69 @@ The `trap cleanup EXIT` pattern ensures:
 - Normal exit → signal sent
 - Refusal → `status: refused` result written, lock released, signal sent
 - Error exit → error result written + signal sent
-- Kill signal → signal sent (EXIT trap fires on SIGTERM)
+- Kill signal → signal sent (EXIT trap fires on SIGTERM; `kill-pane` sends SIGHUP, which does the same)
 - Timeout kill → timeout result already written by watchdog + signal sent
 - Dry run → `status: dry-run` result written; no signal
+- SIGKILL → no trap; tmux writes the result and signals instead (next section)
+
+### Signal on SIGKILL, from tmux (0.6.3)
+
+A wrapper killed with SIGKILL runs no trap, so before 0.6.3 its parent got no result and no
+signal and waited until its own `CCORCH_TIMEOUT` (the user's session, for a Main Brain, waited
+for ever). Before `claude` starts, outside a dry run, the wrapper now sets on its own pane:
+- `remain-on-exit on`, so the pane outlives its program, and
+- a pane-level `pane-died` hook: `run-shell 'bash scripts/ccorch-pane-died.sh <result file>
+  <work dir> <copy_result> <depth>' ; wait-for -S <parent channel> ; kill-pane -t <pane>`.
+
+`scripts/ccorch-pane-died.sh` writes `status: error` unless the pane left a result (through
+`publish_if_absent`, below) and, for the Main Brain, copies the result to `result.md` when that
+is absent or differs (the rule `cleanup()` uses after `claude` ran), removing an older
+`result.md` if the copy fails. `run-shell` without `-b` finishes before the next command, so the parent is
+signalled after the result is in place; the parent's wait loop then finds a result and
+stops. The judgment "the pane is gone and left no result" is the same every time, so a script
+makes it, not the parents' prompts.
+
+- `pane-exited` would not work: a pane-level hook goes away with the pane before it runs. A
+  server-level (`-g`) hook would work but changes the user's tmux configuration.
+- `cleanup()` disarms both first, so a normal exit still signals once, from the trap. The
+  option is unset first and the hook only if that worked: remain-on-exit left on without the
+  hook would keep a dead pane in the user's tmux, while a hook left with the option off
+  never runs. If the option stays, the hook closes the pane and signals once more.
+- The channel, pane id and paths go into a tmux command string, so each must be plain: a
+  channel of `[A-Za-z0-9_-]` not starting with `-`, a pane id of `%` and digits, absolute
+  paths of `[A-Za-z0-9_./-]`. Otherwise no hook is set and the wrapper behaves as before
+  0.6.3. If the hook cannot be set, the option is taken back at once.
+- The wrapper sets the pane-level `remain-on-exit` and `pane-died` and later unsets them. A
+  pane-level value the user had set on that pane is lost, and while the wrapper runs the
+  pane-level `on` hides a window-level setting such as `failed`.
+- The pane's program must be the wrapper's `bash` itself: the parent starts it with
+  `tmux split-pane "ENV=... bash ccorch-wrapper.sh '<task>'"`, and the shell tmux starts
+  (`default-shell`) must exec that simple command. `tests/test_tmux_hook.sh` checks this
+  under the user's shell and `/bin/sh` (here zsh, and bash as `/bin/sh`); other shells are
+  not checked.
+- Checked only on tmux 3.7b, with a private tmux server and a fake `claude`
+  (`tests/test_tmux_hook.sh`); not with a real Claude pane, and not on older tmux.
+- Not covered: a SIGKILL before the hook is set (during the gate, or between arming it and
+  starting `claude`), a SIGKILL during `cleanup()` after the hook is removed and before the
+  trap's result and signal, and `kill-pane`, which runs no hook but makes the trap signal.
+- `/ccor`'s safety exit matches pane ids from `depth1-*.pane`; after a tmux server restart a
+  stale file could match a reused pane id and the loop would keep waiting. Not handled.
 
 ### Atomic Result File Write
 
-The wrapper's own writes (refusal, error, incomplete, timeout results, the first `status.md`,
-the copy to `result.md`) use the `write-to-tmp → mv` pattern:
+The wrapper's own writes (refusal, error, incomplete results, the first `status.md`, the copy
+to `result.md`) use the `write-to-tmp → mv` pattern:
 - Prevents parent from reading a partially written file
 - `mv` is atomic on same filesystem (`/tmp/`)
+
+The two writes that can race with a pane still running, the watchdog's `status: timeout` and
+`ccorch-pane-died.sh`'s `status: error`, go through `publish_if_absent` in
+`scripts/ccorch-lib.sh` instead: `ln tmp target` fails atomically when the pane's result
+exists, so a non-empty result is never overwritten (before 0.6.3 the watchdog tested `-s` and
+then `mv`ed over the file). Without hard links (`ln` fails and the target does not exist) it
+falls back to `mv -n`. An empty target counts as no result but may be a write in progress: it
+is replaced only if still empty after `CCORCH_PUBLISH_GRACE` seconds (default 5). That
+replacement is a check and then a `mv`, so a write in the instant between them is lost.
 
 The panes do not. Their prompt tells them to write the result file and `status.md` with the
 Write tool (or Edit), never with `mv` or shell redirection: a user's ask rule on those commands
@@ -110,6 +163,10 @@ not only when the pane is done. Since 0.6.1 the two kinds of parent are treated 
   `CCORCH_TIMEOUT` as their parent and start later, so the parent's own timeout would end
   it before a silent child's timeout could report.
 - A pane started by an older wrapper has no `CCORCH_RESULT_FILE` and signals on every Stop.
+- Since 0.6.3 the Main Brain does not signal when its copy to `result.md` fails, so the user's
+  session never reads a missing or older `result.md` as this result. A later Stop copies
+  again. If `cleanup()`'s own copy fails, it removes an older `result.md` that differs from
+  the result file; `/ccor`'s wait loop then stops when no Main Brain pane is alive.
 - The wrapper's `cleanup()` copies the result to `result.md` when `result.md` is absent, or
   when this wrapper ran `claude` and the content differs from the result file (`cmp`, not
   mtime, so a rewrite within the same second is not missed). A wrapper refused before
@@ -134,8 +191,11 @@ starts waiting is not lost. The fake tmux in the tests cannot show this.
 
 Runs as a background subshell, started after the gate and the dry-run exit:
 - Independent of the Claude Code process
-- Kills the entire process group (`kill 0`) on timeout
-- Writes timeout result before killing
+- Writes the timeout result with `publish_if_absent`, and kills the entire process group
+  (`kill 0`) unless the pane's own result is there: when the timeout result was published,
+  when it was written but could not be put in place (`publish_if_absent` returns 2), and when
+  it could not even be written and the pane still has no result. A pane whose result came
+  first keeps it and is not killed.
 
 ### Child ID Generation
 
@@ -145,4 +205,6 @@ Runs as a background subshell, started after the gate and the dry-run exit:
 
 ## Tests
 
-`tests/test_wrapper.sh` runs the wrapper against a fake `tmux` and a fake `claude`, in both dry (`CCORCH_DRY_RUN=1`) and real (non-dry) cases; the real cases cover the records, the lock, signalling on refusal and a failing write, `$TMUX_PANE`, and claude's exit status. CI runs it in `.github/workflows/lint.yml`.
+`tests/test_wrapper.sh` runs the wrapper against a fake `tmux` and a fake `claude`, in both dry (`CCORCH_DRY_RUN=1`) and real (non-dry) cases; the real cases cover the records, the lock, signalling on refusal and a failing write, `$TMUX_PANE`, and claude's exit status. Since 0.6.3 it also covers the hook's arming and disarming (from the fake tmux's log), the watchdog, the Stop hook and `cleanup()` with a failing copy (a fake `cp`), `publish_if_absent` and `ccorch-pane-died.sh` on their own. CI runs it in `.github/workflows/lint.yml`.
+
+`tests/test_tmux_hook.sh` runs the wrapper in a private tmux server (`tmux -S <temp socket>`) with a fake `claude`: SIGKILL of the wrapper alone gives `status: error`, a signal and a closed pane, and a normal exit gives one signal and no dead pane. It is skipped without tmux. The race between the watchdog and a late write is closed by `ln` in `publish_if_absent`, not caught by a test: the tests show that `publish_if_absent` never replaces a result that exists.

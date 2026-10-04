@@ -104,11 +104,30 @@ Shell variables do not carry over between Bash calls, so set the two values in t
 WORK_DIR=/tmp/ccorch/<session_id>; CHANNEL=CCORCH_DONE_<session_id>
 until [ -f "${WORK_DIR}/result.md" ]; do
   tmux wait-for "$CHANNEL" || { echo "tmux wait-for failed; see ${WORK_DIR}" >&2; exit 1; }
+  [ -f "${WORK_DIR}/result.md" ] && break
+  # A wrapper signals just before it exits: look for a live Main Brain pane for up to 10 s,
+  # so a pane that is slow to close is not taken for a live one.
+  alive=1
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 1
+    [ -f "${WORK_DIR}/result.md" ] && break 2
+    live=$(tmux list-panes -a -F '#{pane_id}') || { echo "tmux list-panes failed; see ${WORK_DIR}" >&2; exit 1; }
+    alive=""
+    for f in "${WORK_DIR}"/depth1-*.pane; do
+      [ -f "$f" ] && printf '%s\n' "$live" | grep -qxF -- "$(cat "$f")" && alive=1
+    done
+    [ -n "$alive" ] || break
+  done
+  [ -n "$alive" ] || { echo "No Main Brain pane is alive (or none was recorded) and there is no result.md; see ${WORK_DIR}" >&2; exit 1; }
 done
 ```
 
 A signal sent before the wait starts is not lost: tmux keeps it for the next `wait-for` on the channel.
 If `tmux wait-for` fails (the tmux server is gone, or the channel name is empty), the loop stops instead of spinning; check `${WORK_DIR}` by hand.
+If a signal comes, `result.md` is still missing and no Main Brain pane is alive within 10 seconds, the loop stops too.
+That happens when the Main Brain ended and copying its result to `result.md` failed (an older `result.md` is then removed, so it is not read as this result), or when the Main Brain was refused before it recorded its pane.
+A Main Brain pane that stays alive (for example, a second Main Brain was refused while the first runs) sends the loop back to waiting.
+A Main Brain killed with SIGKILL does not end up here: tmux runs the pane's `pane-died` hook, which writes an error result and copies it to `result.md` before it signals.
 
 After `result.md` exists, read and present the results:
 

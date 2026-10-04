@@ -165,7 +165,7 @@ mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
 ```
 ccorch/
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin metadata (v0.6.2)
+│   └── plugin.json              # Plugin metadata (v0.6.3)
 ├── hooks/
 │   ├── hooks.json               # Stop hook registration
 │   └── stop_signal.sh           # Signals the parent pane on Stop (the Main Brain: once its result exists)
@@ -173,7 +173,9 @@ ccorch/
 │   └── ccor/
 │       └── SKILL.md             # Skill definition
 ├── scripts/
-│   └── ccorch-wrapper.sh        # Child pane wrapper script
+│   ├── ccorch-wrapper.sh        # Child pane wrapper script
+│   ├── ccorch-lib.sh            # publish_if_absent, shared by the wrapper and the next script
+│   └── ccorch-pane-died.sh      # Run by the pane's tmux pane-died hook after a SIGKILL
 ├── docs/                        # Getting-started guides, sdd/
 ├── CHANGELOG.md                 # Release notes
 ├── LICENSE                      # MIT
