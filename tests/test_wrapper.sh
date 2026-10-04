@@ -894,12 +894,12 @@ expect "publish, ln unavailable, over a result: returns 1" test "$PUB_RC" = 1
 expect "publish, ln unavailable, over a result: untouched" file_is "${CASE_DIR}/target" 'pane result'
 expect "publish, ln unavailable, over a result: the temporary file is removed" test ! -e "${CASE_DIR}/tmp"
 
-# No result, and it cannot be put there (read-only directory): 2, not "a result exists".
-new_case; mkdir "${CASE_DIR}/ro"; chmod 555 "${CASE_DIR}/ro"; printf 'timeout\n' > "${CASE_DIR}/tmp"
-PUB_RC=0; ( . "$LIB"; publish_if_absent "${CASE_DIR}/tmp" "${CASE_DIR}/ro/target" ) || PUB_RC=$?
-chmod 755 "${CASE_DIR}/ro"
-expect "publish into a read-only directory: returns 2" test "$PUB_RC" = 2
-expect "publish into a read-only directory: the temporary file is removed" test ! -e "${CASE_DIR}/tmp"
+# No result, and it cannot be put there: 2, not "a result exists". The target's directory is
+# a regular file, so this fails for root too (a read-only directory would not).
+new_case; : > "${CASE_DIR}/notadir"; printf 'timeout\n' > "${CASE_DIR}/tmp"
+PUB_RC=0; ( . "$LIB"; publish_if_absent "${CASE_DIR}/tmp" "${CASE_DIR}/notadir/target" ) || PUB_RC=$?
+expect "publish where the target cannot be created: returns 2" test "$PUB_RC" = 2
+expect "publish where the target cannot be created: the temporary file is removed" test ! -e "${CASE_DIR}/tmp"
 
 # --- Watchdog ---
 

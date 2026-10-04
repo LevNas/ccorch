@@ -192,8 +192,10 @@ starts waiting is not lost. The fake tmux in the tests cannot show this.
 Runs as a background subshell, started after the gate and the dry-run exit:
 - Independent of the Claude Code process
 - Writes the timeout result with `publish_if_absent`, and kills the entire process group
-  (`kill 0`) only when that result was published, or when it could not even be written and
-  the pane still has no result. A pane whose result came first keeps it and is not killed.
+  (`kill 0`) unless the pane's own result is there: when the timeout result was published,
+  when it was written but could not be put in place (`publish_if_absent` returns 2), and when
+  it could not even be written and the pane still has no result. A pane whose result came
+  first keeps it and is not killed.
 
 ### Child ID Generation
 

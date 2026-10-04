@@ -28,7 +28,7 @@ The four NITs deferred from #13's review (refs #11).
   result and then `mv`ed `status: timeout` over the file, and killed the pane either way. It
   now publishes with `publish_if_absent` (new `scripts/ccorch-lib.sh`): `ln` fails when the
   result exists, so there is no gap between the check and the write, and the pane is killed
-  only when the timeout result went in. The gap is closed by `ln`, not caught by a test; the
+  unless the pane's own result is there. The gap is closed by `ln`, not caught by a test; the
   tests show that `publish_if_absent` never replaces a non-empty result (also with `mv -n`
   where hard links are not available). An empty result file is still "no result", but is
   replaced only if it stays empty for `CCORCH_PUBLISH_GRACE` seconds (default 5); that
