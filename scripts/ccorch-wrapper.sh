@@ -32,6 +32,12 @@
 #   CCORCH_DRY_RUN        — If set, run the start gate read-only (no lock, no records), print
 #                           "out_dir: <temp dir>" and the claude argv, and exit without
 #                           starting claude. Every file it writes is in that temp dir.
+#   CCORCH_MODE           — Unset for /ccor. "job" for /ccorch:job: one task, done by this pane
+#                           itself, at depth 1 only, in a worktree (see CCORCH_WORKTREE). The
+#                           pane may not start panes. Any other value is refused.
+#   CCORCH_WORKTREE       — Required with CCORCH_MODE=job, read only then: the worktree name
+#                           passed to `claude --worktree`. Letters, digits, '.', '_' and '-',
+#                           not starting with '.' or '-', no "..", at most 64 characters.
 #
 # CCORCH_WORK_DIR and CCORCH_PARENT_CHANNEL are checked first (exit 2 if missing: no result
 # or signal is possible without them); every later failure is a "refused" result.
@@ -94,6 +100,8 @@ MAX_CHILDREN_D1="${CCORCH_MAX_CHILDREN_D1:-3}"
 MAX_CHILDREN_D2="${CCORCH_MAX_CHILDREN_D2:-2}"
 PARENT_ID="${CCORCH_PARENT_ID:-}"
 LOCK_WAIT="${CCORCH_LOCK_WAIT:-10}"
+MODE="${CCORCH_MODE:-}"
+WORKTREE_NAME=""
 
 # Everything that ends up in a front-matter line is sanitized: one line, no double quotes,
 # no backslashes, bounded length. A value from the environment or the task must not be
@@ -309,6 +317,27 @@ case "$DEPTH" in
   *) refuse "CCORCH_DEPTH must be 1, 2 or 3 (got '${DEPTH}')" ;;
 esac
 
+# A job is one task that this pane does itself, in a worktree that claude creates. It is a
+# depth-1 pane with no parent; the worktree name goes into claude's argv, so it is checked
+# here (C locale ranges, as plain_value below).
+case "$MODE" in
+  '') ;;
+  job)
+    if [ "$DEPTH" != "1" ] || [ -n "$PARENT_ID" ]; then
+      refuse "CCORCH_MODE=job runs at depth 1 with no CCORCH_PARENT_ID (got depth '${DEPTH}')"
+    fi
+    WORKTREE_NAME="${CCORCH_WORKTREE:-}"
+    if [ -z "$WORKTREE_NAME" ]; then
+      refuse "CCORCH_MODE=job needs CCORCH_WORKTREE: a job works in its own worktree"
+    fi
+    if ! ( LC_ALL=C; [[ "$WORKTREE_NAME" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$ ]] ) \
+       || [[ "$WORKTREE_NAME" == *..* ]]; then
+      refuse "CCORCH_WORKTREE must be letters, digits, '.', '_' and '-', not start with '.' or '-', have no '..', and be at most 64 characters"
+    fi
+    ;;
+  *) refuse "CCORCH_MODE must be unset or 'job'" ;;
+esac
+
 # Lock: mkdir is atomic and portable (flock is util-linux only). It is held from counting
 # until the records are written, so simultaneous starts cannot both pass. A dry run takes
 # no lock: it records nothing, so a race does not matter.
@@ -467,7 +496,8 @@ if [ -z "$DRY_RUN" ]; then
   TASK_SHORT="${TASK:0:40}"
   TASK_SHORT="${TASK_SHORT//$'\n'/ }"
   case "$DEPTH" in
-    1) PANE_TITLE="[Main] ${TASK_SHORT}" ;;
+    1) PANE_TITLE="[Main] ${TASK_SHORT}"
+       [ "$MODE" != job ] || PANE_TITLE="[Job] ${TASK_SHORT}" ;;
     2) PANE_TITLE="[Child] ${TASK_SHORT}" ;;
     3) PANE_TITLE="[GChild] ${TASK_SHORT}" ;;
   esac
@@ -482,8 +512,24 @@ CCORCH_PROJECT_DIR="$PROJECT_DIR"
 
 STATUS_FILE="${OUT_DIR}/status.md"
 
-# Initialize status dashboard for Main Brain
-if [ "$DEPTH" -eq 1 ]; then
+# Initialize status dashboard for Main Brain. A job has no children, so its dashboard is this
+# one row and the job is not asked to keep it.
+if [ "$MODE" = job ]; then
+  cat > "${STATUS_FILE}.tmp" <<EOF
+# Orchestration Status
+
+**Task**: ${TASK:0:200}
+**Started**: $(date -Iseconds)
+**Status**: running
+
+## Agents
+
+| ID | Role | Owned Paths | Status | Notes |
+|----|------|-------------|--------|-------|
+| job | Single job | worktree ${WORKTREE_NAME} | running | The result file is the final status |
+EOF
+  mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
+elif [ "$DEPTH" -eq 1 ]; then
   cat > "${STATUS_FILE}.tmp" <<EOF
 # Orchestration Status
 
@@ -523,7 +569,21 @@ SYSTEM_PROMPT="You are a CCORCH worker at DEPTH=${DEPTH}.
 - This pane runs in auto mode. An action the auto-mode classifier blocks may need a human to approve it in this pane; if you are blocked, say so in your result file instead of retrying another way round. Until that file exists your parent cannot tell a blocked pane from a busy one
 - The common forms of some commands are denied by rule at this depth. The rules catch the usual command form only, so they are not a complete block. Do not work around a denial by another route (such as \`sh -c\` or a full path): that is a rule you must follow, not something the rules enforce"
 
-if [ "$DEPTH" -eq 1 ]; then
+if [ "$MODE" = job ]; then
+  SYSTEM_PROMPT="${SYSTEM_PROMPT}
+
+## Single job
+You were started by /ccorch:job to do one task yourself. Do not split it into panes: the usual forms of \`tmux\` commands are denied for you, and you must not start panes or other Claude sessions by any route. Subagents (the Agent tool) are allowed inside this session.
+
+## Where you work
+This session was started with \`claude --worktree ${WORKTREE_NAME}\` in ${PROJECT_DIR}, so it runs in a git worktree of that repository, on a branch of its own. Edit, commit and run commands inside that worktree only. Do not check out branches in, or write to, the repository's main checkout (${PROJECT_DIR}) or any other worktree. If the task asks for that, stop and say so in your result file.
+
+## The task text
+The task text is a cover note followed by the content. The cover note says where you work, the target repository's rules, where working files go, what to return and what to do when you are stopped. The content points to issues and files instead of repeating them: read them there. If the cover note and these instructions disagree, follow these instructions and say so in your result file.
+
+## Status dashboard
+The wrapper wrote ${STATUS_FILE} for you. You do not need to update it: your result file is the job's final status."
+elif [ "$DEPTH" -eq 1 ]; then
   NEXT_DEPTH=2
   SYSTEM_PROMPT="${SYSTEM_PROMPT}
 
@@ -636,6 +696,43 @@ You have been assigned specific directories to work on. Do NOT modify files outs
 If you need changes to shared files, note them in your result file for your parent to handle."
 fi
 
+if [ "$MODE" = job ]; then
+  SYSTEM_PROMPT="${SYSTEM_PROMPT}
+
+## Result File Format
+Write your results using this format. Every section is required; write \"none\" where there is nothing, never leave a section out.
+
+\`\`\`markdown
+---
+status: success
+depth: ${DEPTH}
+task: \"Brief task description\"
+completed: $(date -Iseconds)
+---
+
+# Results
+
+## Summary
+What changed and why. Every claim here has a line under Evidence; a claim without one is left out or goes under Not tested.
+
+## Evidence
+- \`<command or action>\` → <the result you observed>
+
+### Not tested
+- <what this work does not show working, or why nothing is left out>
+
+## Branch and PR
+- Branch: <branch name>
+- PR: <URL, or \"none\">
+
+## Left behind
+- <working files left in the worktree, the worktree itself, anything the caller has to clean up>
+\`\`\`
+
+Use \`status: success\` only when the task is done. Otherwise use \`status: partial\` and say in the Summary where you stopped and why (for example, an action that needs a human's approval in this pane).
+
+Write it with the Write tool, in one go, when you are done. Do not write it through a temporary file and \`mv\`."
+else
 SYSTEM_PROMPT="${SYSTEM_PROMPT}
 
 ## Result File Format
@@ -662,6 +759,7 @@ Any unexpected findings or important observations.
 \`\`\`
 
 Write it with the Write tool, in one go, when you are done. Do not write it through a temporary file and \`mv\`."
+fi
 
 # --- Export env vars for Stop hook ---
 # The ccorch Stop hook (hooks/stop_signal.sh) reads these to signal the parent.
@@ -715,12 +813,20 @@ fi
 if [ "$DEPTH" -ge 3 ]; then
   DENY_RULES+=('Agent' 'Bash(tmux *)')
 fi
+if [ "$MODE" = job ]; then
+  DENY_RULES+=('Bash(tmux *)')   # a job does its task itself and starts no panes
+fi
 
 # --add-dir: the session directory is outside the project. Without it, a Read of status.md
 # there asked for approval in auto mode (Claude Code v2.1.288) and stopped the pane; the
 # result files are in the same directory. It takes several paths, so it comes before another flag.
-CLAUDE_CMD=(
-  claude
+CLAUDE_CMD=(claude)
+# A job's place of work is set here, not asked for in the task text: claude creates the
+# worktree and the session is isolated in it.
+if [ "$MODE" = job ]; then
+  CLAUDE_CMD+=(--worktree "$WORKTREE_NAME")
+fi
+CLAUDE_CMD+=(
   --add-dir "$OUT_DIR"
   --permission-mode auto
   --disallowedTools "${DENY_RULES[@]}"

@@ -5,6 +5,8 @@
 tmux pane orchestration for Claude Code. `/ccor` splits work into **separate
 sessions** — a Main Brain pane that delegates to Child and Grandchild panes —
 and collects their results through files and `tmux wait-for` signals.
+`/ccorch:job` hands one task to one pane, working in a new worktree of the
+target repository.
 
 Since 0.5.0 ccorch does only this. Distribution of work *inside* one session
 (leaf agents, parallel worktree fan-out) moved out of ccorch; if installed,
@@ -33,7 +35,7 @@ ccmemo integration: [docs/getting-started.md](docs/getting-started.md)
 
 ## When to use panes
 
-Use `/ccor` only for:
+Use `/ccor` or `/ccorch:job` only for:
 
 1. Work that **writes to another repository**
 2. Work that must run under the **target repository's permission/hook layer**
@@ -55,6 +57,26 @@ Example:
 /ccor Refactor the authentication module — extract middleware, add unit tests, update API docs
 ```
 
+## `/ccorch:job`
+
+```
+/ccorch:job <task, the target repository and a worktree name>
+```
+
+One task, one pane, no split. The skill writes a **cover note** — where the
+pane works, the target repository's rules, where working files go, what to
+return, what to do when stopped — puts it before the task's content (written
+with a project's `arc-handoff` skill when the session has one), and starts the
+pane with `scripts/ccorch-job.sh`. It waits with `scripts/ccorch-wait.sh` and
+reports the result file: Summary, Evidence, Not tested, Branch and PR, Left
+behind.
+
+The place of work is not left to the request text: the wrapper's job mode
+(`CCORCH_MODE=job`, `CCORCH_WORKTREE=<name>`) starts `claude --worktree <name>`,
+so the pane's session is isolated in a new worktree and cannot switch the
+repository's main checkout. A job pane also denies `tmux`, so it starts no
+panes. Design: [DEC-007](docs/sdd/design/decisions/DEC-007.md).
+
 ## How It Works
 
 ```
@@ -75,7 +97,7 @@ Your Session ──► Main Brain (DEPTH=1)
 
 - **Panes run in auto mode**: every pane starts with `--permission-mode auto`, not a permission bypass. Auto mode's classifier reviews actions; when it blocks one, a human may have to approve or redirect it in that pane. When auto mode is not available to the pane's session (a model that does not support it, auto mode turned off with the [`disableAutoMode`](https://code.claude.com/docs/en/settings-reference) setting, or turned off by Anthropic), Claude Code starts the pane in Manual mode and it prompts before most actions; a pane still waiting when `CCORCH_TIMEOUT` runs out is stopped; its status bar shows `auto mode on` only when auto mode is active. The start gate and the deny rules below apply in every mode
 - **Start gate**: before `claude` starts, the wrapper refuses a pane when a limit is not a positive integer, when the depth is not 1-3 or does not follow from the parent's recorded depth, when a second Main Brain starts in one session, when the live ccorch panes would exceed `CCORCH_MAX_PANES`, or when the live children under one parent would exceed `CCORCH_MAX_CHILDREN_D1` / `_D2`. A refused child returns `status: refused` with the reason in its result file. The gate uses a portable `mkdir` lock (no `flock`, so it works on macOS). It bounds a model that uses the documented launch command; a process that rewrites its own environment or runs `claude` directly can escape it, and then the auto-mode classifier is the boundary
-- **Deny rules**: every depth denies the common forms of `rm -rf`, force push, branch delete, `git reset --hard`, `git clean` and `sudo`; depth 2 and 3 also deny `git push`; depth 3 also denies the Agent tool and `tmux`. The Bash deny rules are not a security boundary: they miss other flag spellings, full paths, `sh -c`, aliases and the like. The boundaries are the classifier and the start gate. See [NFR-SEC-003](docs/sdd/requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention) and [DEC-006](docs/sdd/design/decisions/DEC-006.md)
+- **Deny rules**: every depth denies the common forms of `rm -rf`, force push, branch delete, `git reset --hard`, `git clean` and `sudo`; depth 2 and 3 also deny `git push`; depth 3 also denies the Agent tool and `tmux`; a job pane also denies `tmux`. The Bash deny rules are not a security boundary: they miss other flag spellings, full paths, `sh -c`, aliases and the like. The boundaries are the classifier and the start gate. See [NFR-SEC-003](docs/sdd/requirements/nfr/security.md#nfr-sec-003-structural-depth-overflow-prevention) and [DEC-006](docs/sdd/design/decisions/DEC-006.md)
 - **Timeout**: Panes auto-terminate after configurable timeout (default: 600s)
 
 ## Configuration
@@ -86,6 +108,8 @@ Your Session ──► Main Brain (DEPTH=1)
 | `CCORCH_MAX_PANES` | `8` | Maximum live ccorch panes per session, Main Brain included (enforced by the start gate) |
 | `CCORCH_MAX_CHILDREN_D1` | `3` | Max concurrent children for Main Brain |
 | `CCORCH_MAX_CHILDREN_D2` | `2` | Max concurrent grandchildren per Child |
+| `CCORCH_MODE` | unset | `job` for a `/ccorch:job` pane (set by `scripts/ccorch-job.sh`) |
+| `CCORCH_WORKTREE` | unset | The job's worktree name, required with `CCORCH_MODE=job` |
 
 ## Moved to ccharness (0.9.0)
 

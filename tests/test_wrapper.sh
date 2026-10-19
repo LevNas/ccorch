@@ -211,6 +211,7 @@ run_wrapper() {
   RC=0
   run_pg env -u CCORCH_PARENT_ID -u CCORCH_MAX_PANES -u TMUX_PANE -u CCORCH_LOCK_WAIT \
       -u CCORCH_MAX_CHILDREN_D1 -u CCORCH_MAX_CHILDREN_D2 -u CCORCH_DRY_RUN \
+      -u CCORCH_MODE -u CCORCH_WORKTREE \
       "${unset_args[@]+"${unset_args[@]}"}" "${kept[@]}" \
       bash "$WRAPPER" "${task_args[@]+"${task_args[@]}"}" > "${CASE_DIR}/out" 2> "${CASE_DIR}/err" < /dev/null || RC=$?
   OUT=$(cat "${CASE_DIR}/out")
@@ -780,6 +781,75 @@ PROMPT_FILE="${RESULT_DIR}/$(child_id).dry-run.system-prompt"
 expect "depth 2 prompt: cleanup comes before the result, not of its own pane" grep -qF 'never your own' "$PROMPT_FILE"
 expect "depth 2 prompt: a signal without a result file means wait again" grep -qF 'wait on its channel again' "$PROMPT_FILE"
 expect_not "depth 2 prompt: no 'mv \"' instruction" grep -qF 'mv "' "$PROMPT_FILE"
+
+# --- Job mode (/ccorch:job): one task, in a worktree that claude creates ---
+
+# argv_starts_with_worktree <name> — claude's first two arguments are --worktree <name>
+argv_starts_with_worktree() {
+  [ "$(argv_elements | sed -n '2,3p')" = "--worktree
+$1" ]
+}
+# argv_has_element <value> — one claude argument is exactly this value. argv_has would also
+# match text inside the system prompt (the /ccor prompt mentions `--worktree`).
+argv_has_element() { argv_elements | grep -qxF -- "$1"; }
+
+new_case; run_dry 1 CCORCH_MODE=job CCORCH_WORKTREE=job-1
+expect "job: gate ok" gate_ok
+expect "job: claude starts with --worktree job-1" argv_starts_with_worktree job-1
+expect "job: auto follows --permission-mode" mode_is_auto
+expect "job: --add-dir gives the session directory" add_dir_is_out_dir
+for rule in "${ALL_RULES[@]}"; do
+  expect "job: deny rule '$rule' between the flags" has_deny "$rule"
+done
+expect "job: Bash(tmux *) denied" has_deny 'Bash(tmux *)'
+expect_not "job: Agent not denied" has_deny 'Agent'
+expect_not "job: git push not denied" has_deny 'Bash(git push *)'
+PROMPT_FILE="${RESULT_DIR}/$(child_id).dry-run.system-prompt"
+expect "job prompt: has the Single job section" grep -qF '## Single job' "$PROMPT_FILE"
+expect "job prompt: names the worktree" grep -qF 'claude --worktree job-1' "$PROMPT_FILE"
+expect_not "job prompt: no child pane template" grep -qF 'Creating Child Panes' "$PROMPT_FILE"
+expect_not "job prompt: no split-pane command" grep -qF 'split-pane' "$PROMPT_FILE"
+for section in '## Summary' '## Evidence' '### Not tested' '## Branch and PR' '## Left behind'; do
+  expect "job prompt: result format has '${section}'" grep -qxF -- "$section" "$PROMPT_FILE"
+done
+expect_not "job prompt: no Main Brain result format" grep -qF '## Execution Summary' "$PROMPT_FILE"
+expect "job: status.md has the one job row" grep -qF '| job | Single job | worktree job-1 |' "${RESULT_DIR}/status.md"
+
+# Names at the edges of the allowed form
+new_case; run_dry 1 CCORCH_MODE=job CCORCH_WORKTREE=a.b_c-1
+expect "job: worktree 'a.b_c-1' accepted" gate_ok
+new_case; run_dry 1 CCORCH_MODE=job CCORCH_WORKTREE="$(printf 'a%.0s' {1..64})"
+expect "job: a 64-character worktree name accepted" gate_ok
+
+# Refusals
+new_case; seed_parent 2; run_dry 2 CCORCH_PARENT_ID=parent-1 CCORCH_MODE=job CCORCH_WORKTREE=w
+expect "job at depth 2: refused" refused_with "CCORCH_MODE=job runs at depth 1"
+new_case; run_dry 1 CCORCH_PARENT_ID=parent-1 CCORCH_MODE=job CCORCH_WORKTREE=w
+expect "job with a parent id: refused" refused_with "CCORCH_MODE=job runs at depth 1"
+new_case; run_dry 1 CCORCH_MODE=job
+expect "job without CCORCH_WORKTREE: refused" refused_with "CCORCH_MODE=job needs CCORCH_WORKTREE"
+for bad in '-w' '.hidden' 'a..b' 'a/b' 'a b' '$(id)' "$(printf 'a%.0s' {1..65})" 'é'; do
+  new_case; run_dry 1 CCORCH_MODE=job CCORCH_WORKTREE="$bad"
+  expect "job: worktree name '${bad:0:20}' refused" refused_with "CCORCH_WORKTREE must be"
+  expect_not "job: worktree name '${bad:0:20}': no claude argv" argv_has 'argv:'
+done
+new_case; run_dry 1 CCORCH_MODE=jobs CCORCH_WORKTREE=w
+expect "unknown CCORCH_MODE: refused" refused_with "CCORCH_MODE must be unset or 'job'"
+
+# Without job mode, CCORCH_WORKTREE is not read
+new_case; run_dry 1 CCORCH_WORKTREE=w
+expect "CCORCH_WORKTREE without job mode: gate ok" gate_ok
+expect_not "CCORCH_WORKTREE without job mode: no --worktree argument" argv_has_element '--worktree'
+expect_not "CCORCH_WORKTREE without job mode: tmux not denied" has_deny 'Bash(tmux *)'
+
+# A real start: the fake claude gets --worktree, and the pane title says Job
+new_case; run_real 1 CCORCH_MODE=job CCORCH_WORKTREE=job-2 FAKE_CLAUDE_WRITE='status: success'
+expect "job real start: wrapper exits 0" test "$RC" -eq 0
+expect "job real start: claude got --worktree job-2" \
+  test "$(sed -n '1,2p' "$FAKE_CLAUDE_ARGV")" = "--worktree
+job-2"
+expect "job real start: pane title starts with [Job]" tmux_logged '[Job] test task'
+expect "job real start: result.md is the job's result" grep -qxF 'status: success' "${WORK_DIR}/result.md"
 
 # --- Stop hook: the Main Brain signals only once its result exists; others every turn ---
 

@@ -1,7 +1,7 @@
 {
   "name": "ccorch",
-  "description": "tmux pane orchestration for Claude Code, for cross-repository and supervised work only: the /ccor skill launches Main Brain / Child / Grandchild panes and collects their results.",
-  "version": "0.6.3",
+  "description": "tmux pane orchestration for Claude Code, for cross-repository and supervised work only: the /ccor skill launches Main Brain / Child / Grandchild panes and collects their results; /ccorch:job hands one task to one pane in a new worktree.",
+  "version": "0.7.0",
   "author": {
     "name": "LevNas"
   },

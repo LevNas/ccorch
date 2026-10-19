@@ -72,6 +72,7 @@ Grandchild (DEPTH=3)
 | DEC-004 | v2 subagent-default hybrid; three conditions for panes | Partially superseded by DEC-005 (pane conditions stand) | [Details](decisions/DEC-004.md) @decisions/DEC-004.md |
 | DEC-005 | ccorch is pane orchestration only; in-session distribution moved to ccharness | Accepted | [Details](decisions/DEC-005.md) @decisions/DEC-005.md |
 | DEC-006 | Panes run in auto mode; limits enforced by a start gate | Accepted (complements DEC-002) | [Details](decisions/DEC-006.md) @decisions/DEC-006.md |
+| DEC-007 | One job per pane (`/ccorch:job`): the wrapper sets the worktree, a cover note says the rest | Accepted (not yet checked live) | [Details](decisions/DEC-007.md) @decisions/DEC-007.md |
 
 ## Security Considerations
 
@@ -199,5 +200,6 @@ docs/sdd/design/
     ├── DEC-003.md              # /tmp/ result storage
     ├── DEC-004.md              # v2 hybrid; three pane conditions
     ├── DEC-005.md              # pane orchestration only
-    └── DEC-006.md              # auto mode and the start gate
+    ├── DEC-006.md              # auto mode and the start gate
+    └── DEC-007.md              # one job per pane, cover note
 ```
