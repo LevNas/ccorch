@@ -72,6 +72,7 @@ Grandchild (DEPTH=3)
 | DEC-004 | v2 subagent-default hybrid; three conditions for panes | Partially superseded by DEC-005 (pane conditions stand) | [Details](decisions/DEC-004.md) @decisions/DEC-004.md |
 | DEC-005 | ccorch is pane orchestration only; in-session distribution moved to ccharness | Accepted | [Details](decisions/DEC-005.md) @decisions/DEC-005.md |
 | DEC-006 | Panes run in auto mode; limits enforced by a start gate | Accepted (complements DEC-002) | [Details](decisions/DEC-006.md) @decisions/DEC-006.md |
+| DEC-007 | One job per pane (`/ccorch:job`): the wrapper sets the worktree, a cover note says the rest | Accepted (not yet checked live) | [Details](decisions/DEC-007.md) @decisions/DEC-007.md |
 
 ## Security Considerations
 
@@ -104,8 +105,11 @@ claude --permission-mode auto \
 # DEPTH 2: the same, with 'Bash(git push *)' and 'Bash(git -C * push*)' added to --disallowedTools
 # DEPTH 3: DEPTH 2, with 'Agent' and 'Bash(tmux *)' added to --disallowedTools
 
-# Task delivery, started in the background before claude launches:
-sleep 3; tmux load-buffer "$TASK_FILE"; tmux paste-buffer -t "$CURRENT_PANE"; sleep 0.5; tmux send-keys -t "$CURRENT_PANE" Enter
+# A job pane (CCORCH_MODE=job): 'claude --worktree <name>' first, and 'Bash(tmux *)' added (DEC-007)
+
+# Task delivery, started in the background before claude launches. The buffer is named after the
+# pane and deleted on paste, so two panes starting together cannot paste each other's task:
+sleep 3; tmux load-buffer -b "ccorch-${CHILD_ID}" "$TASK_FILE"; tmux paste-buffer -d -b "ccorch-${CHILD_ID}" -t "$CURRENT_PANE"; sleep 0.5; tmux send-keys -t "$CURRENT_PANE" Enter
 ```
 
 ### Guard Rail System Prompts
@@ -165,17 +169,21 @@ mv "${RESULT_FILE}.tmp" "$RESULT_FILE"
 ```
 ccorch/
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin metadata (v0.6.3)
+│   └── plugin.json              # Plugin metadata (v0.7.0)
 ├── hooks/
 │   ├── hooks.json               # Stop hook registration
 │   └── stop_signal.sh           # Signals the parent pane on Stop (the Main Brain: once its result exists)
 ├── skills/
-│   └── ccor/
-│       └── SKILL.md             # Skill definition
+│   ├── ccor/
+│   │   └── SKILL.md             # /ccor: Main Brain splits the task across panes
+│   └── job/
+│       └── SKILL.md             # /ccorch:job: one task, one pane, in a new worktree (DEC-007)
 ├── scripts/
 │   ├── ccorch-wrapper.sh        # Child pane wrapper script
 │   ├── ccorch-lib.sh            # publish_if_absent, shared by the wrapper and the next script
-│   └── ccorch-pane-died.sh      # Run by the pane's tmux pane-died hook after a SIGKILL
+│   ├── ccorch-pane-died.sh      # Run by the pane's tmux pane-died hook after a SIGKILL
+│   ├── ccorch-job.sh            # Starts a /ccorch:job pane through the wrapper
+│   └── ccorch-wait.sh           # Waits for a work directory's result.md (one command)
 ├── docs/                        # Getting-started guides, sdd/
 ├── CHANGELOG.md                 # Release notes
 ├── LICENSE                      # MIT
@@ -199,5 +207,6 @@ docs/sdd/design/
     ├── DEC-003.md              # /tmp/ result storage
     ├── DEC-004.md              # v2 hybrid; three pane conditions
     ├── DEC-005.md              # pane orchestration only
-    └── DEC-006.md              # auto mode and the start gate
+    ├── DEC-006.md              # auto mode and the start gate
+    └── DEC-007.md              # one job per pane, cover note
 ```
