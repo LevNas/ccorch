@@ -25,6 +25,7 @@ cat > "${ROOT}/bin/tmux" <<'EOF'
 n=$(ls "$FAKE_TMUX_DIR" | wc -l)
 printf '%s\n' "$@" > "$FAKE_TMUX_DIR/call-$n"
 case "$1" in
+  -V) echo "${FAKE_TMUX_VERSION:-tmux 3.7b}" ;;
   new-window) [ -n "${FAKE_NEW_WINDOW_FAIL:-}" ] && exit 1; echo %55 ;;
   wait-for)
     [ -n "${FAKE_WAIT_WRITES:-}" ] && echo "status: success" > "$FAKE_WAIT_WRITES"
@@ -52,7 +53,7 @@ new_case() {
   git -C "$REPO" init -q
   TASK="${ROOT}/case${CASE}/task.md"
   printf 'Cover note\nit'\''s "quoted" $HOME\n' > "$TASK"
-  unset FAKE_NEW_WINDOW_FAIL FAKE_WAIT_RC FAKE_WAIT_WRITES FAKE_LIVE CCORCH_MAX_PANES
+  unset FAKE_NEW_WINDOW_FAIL FAKE_WAIT_RC FAKE_WAIT_WRITES FAKE_LIVE CCORCH_MAX_PANES FAKE_TMUX_VERSION
 }
 run_job() { RC=0; bash "$JOB" "$@" > "${ROOT}/out" 2> "${ROOT}/err" || RC=$?; OUT=$(cat "${ROOT}/out"); ERR=$(cat "${ROOT}/err"); }
 # new_window_args — the logged arguments of the new-window call
@@ -67,10 +68,13 @@ out_value() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p"; }
 new_case; run_job "$REPO" job-1 "$TASK" 120
 expect "job: exit 0" test "$RC" -eq 0
 WD=$(out_value work_dir)
-expect "job: prints work_dir under TMPDIR/ccorch" test "${WD#"${TMPDIR}/ccorch/job-"}" != "$WD"
+expect "job: prints work_dir as TMPDIR/ccorch-job.XXXXXX" test "${WD#"${TMPDIR}/ccorch-job."}" != "$WD"
 expect "job: prints a plain channel" bash -c '[[ "$1" =~ ^CCORCH_DONE_[A-Za-z0-9_]+$ ]]' _ "$(out_value channel)"
 expect "job: prints the pane id" test "$(out_value pane)" = %55
 expect "job: work dir exists" test -d "$WD"
+expect "job: work dir is mode 700" test "$(stat -c %a "$WD")" = 700
+expect "job: task copy is mode 600" test "$(stat -c %a "${WD}/job-task.md")" = 600
+expect "job: fixed window name, no caller value" nw_pair -n ccorch-job
 expect "job: task kept in the work dir, unchanged" cmp -s "$TASK" "${WD}/job-task.md"
 expect "job: window starts in the repository" nw_pair -c "$(cd "$REPO" && pwd -P)"
 expect "job: detached" nw_has -d
@@ -122,6 +126,29 @@ for bad in 0 -5 abc 1234567; do
 done
 new_case; FAKE_NEW_WINDOW_FAIL=1 run_job "$REPO" job-1 "$TASK"
 expect "tmux new-window fails: exit 2" test "$RC" -eq 2
+for bad in '-w' '.hidden' 'a..b' 'a/b' '#(id)' "$(printf 'a%.0s' {1..65})"; do
+  new_case; run_job "$REPO" "$bad" "$TASK"
+  expect "worktree name '${bad:0:20}': exit 2" test "$RC" -eq 2
+  expect "worktree name '${bad:0:20}': nothing launched" no_launch
+done
+new_case; mkdir -p "$REPO/.claude/worktrees/job-1"; run_job "$REPO" job-1 "$TASK"
+expect "existing worktree directory: exit 2" test "$RC" -eq 2
+expect "existing worktree directory: nothing launched" no_launch
+new_case; HASH_REPO="${ROOT}/case${CASE}/re#po"; mkdir -p "$HASH_REPO"; git -C "$HASH_REPO" init -q
+run_job "$HASH_REPO" job-1 "$TASK"
+expect "repository path with '#': exit 2" test "$RC" -eq 2
+expect "repository path with '#': nothing launched" no_launch
+new_case; head -c 100001 /dev/zero | tr '\0' a > "$TASK"; run_job "$REPO" job-1 "$TASK"
+expect "task over 100000 bytes: exit 2" test "$RC" -eq 2
+new_case; head -c 100000 /dev/zero | tr '\0' a > "$TASK"; run_job "$REPO" job-1 "$TASK"
+expect "task of 100000 bytes: exit 0" test "$RC" -eq 0
+new_case; FAKE_TMUX_VERSION='tmux 2.9a' run_job "$REPO" job-1 "$TASK"
+expect "tmux 2.9a: exit 2" test "$RC" -eq 2
+expect "tmux 2.9a: nothing launched" no_launch
+new_case; FAKE_TMUX_VERSION='tmux next-3.8' run_job "$REPO" job-1 "$TASK"
+expect "tmux next-3.8: exit 0" test "$RC" -eq 0
+new_case; FAKE_TMUX_VERSION='weird' run_job "$REPO" job-1 "$TASK"
+expect "unreadable tmux version: exit 2" test "$RC" -eq 2
 
 # --- Wait ---
 
@@ -150,6 +177,9 @@ new_case; run_wait "${ROOT}/missing" CH
 expect "wait: missing work dir: exit 2" test "$RC" -eq 2
 new_case; W="${ROOT}/case${CASE}/w"; mkdir -p "$W"; run_wait "$W" ''
 expect "wait: empty channel: exit 2" test "$RC" -eq 2
+new_case; W="${ROOT}/case${CASE}/w"; mkdir -p "$W"; run_wait "$W" '-S'
+expect "wait: channel starting with '-': exit 2" test "$RC" -eq 2
+expect "wait: channel starting with '-': no tmux call" bash -c '! ls "$1" | grep -q .' _ "$FAKE_TMUX_DIR"
 
 # --- The skill's cover note keeps its five sections ---
 
@@ -157,8 +187,8 @@ SKILL="${HERE}/../skills/job/SKILL.md"
 for section in '## Where you work' "## The repository's rules" '## Working files' '## What to return' '## When you are stopped'; do
   expect "skill: cover note has '${section}'" grep -qxF -- "$section" "$SKILL"
 done
-expect "skill: names the launcher" grep -qF 'scripts/ccorch-job.sh' "$SKILL"
-expect "skill: names the wait script" grep -qF 'scripts/ccorch-wait.sh' "$SKILL"
+expect "skill: names the launcher" grep -qF 'ccorch-job.sh' "$SKILL"
+expect "skill: names the wait script" grep -qF 'ccorch-wait.sh' "$SKILL"
 
 echo
 echo "${PASS} passed, ${FAIL} failed"

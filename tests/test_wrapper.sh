@@ -851,6 +851,19 @@ job-2"
 expect "job real start: pane title starts with [Job]" tmux_logged '[Job] test task'
 expect "job real start: result.md is the job's result" grep -qxF 'status: success' "${WORK_DIR}/result.md"
 
+# The task goes through a buffer named after the pane, deleted by the paste: two panes that
+# start together cannot paste each other's task. (claude sleeps so the 3 s sender runs.)
+new_case; run_real 1 FAKE_CLAUDE_SLEEP=4 FAKE_CLAUDE_WRITE='status: success'
+ID=$(child_id)
+expect "task delivery: load-buffer into ccorch-<id>" tmux_logged "load-buffer -b ccorch-${ID} "
+expect "task delivery: paste-buffer -d from ccorch-<id>" tmux_logged "paste-buffer -d -b ccorch-${ID} -t %99"
+expect_not "task delivery: no unnamed load-buffer" grep -qE '^load-buffer /' "$FAKE_TMUX_LOG"
+
+# A '#' in the task is literal in the pane title (tmux expands formats there).
+new_case; TASK_TEXT='fix #12 #(id) #{pane_id}'
+run_real 1 FAKE_CLAUDE_WRITE='status: success'
+expect "pane title: '#' doubled" tmux_logged '[Main] fix ##12 ##(id) ##{pane_id}'
+
 # --- Stop hook: the Main Brain signals only once its result exists; others every turn ---
 
 HOOK="${HERE}/../hooks/stop_signal.sh"

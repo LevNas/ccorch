@@ -17,7 +17,12 @@ set -u
 WORK_DIR="$1"
 CHANNEL="$2"
 [ -d "$WORK_DIR" ] || { echo "ccorch-wait: not a directory: ${WORK_DIR}" >&2; exit 2; }
-[ -n "$CHANNEL" ] || { echo "ccorch-wait: the channel is empty" >&2; exit 2; }
+# A channel name is letters, digits, '_' and '-', not starting with '-' (tmux would read it as
+# a flag); ccorch-job.sh and /ccor make such names.
+if ! ( LC_ALL=C; [[ "$CHANNEL" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*$ ]] ); then
+  echo "ccorch-wait: the channel must be letters, digits, '_' and '-', not starting with '-'" >&2
+  exit 2
+fi
 
 RESULT="${WORK_DIR}/result.md"
 until [ -f "$RESULT" ]; do

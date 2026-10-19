@@ -11,8 +11,10 @@ Hand one task to a pane. The pane does the task itself, in a worktree of the tar
 
 What the pane must do is split in two:
 
-- **Set by the wrapper, not asked for in text.** The pane runs `claude --worktree <name>` in the target repository, so its session is isolated in a new worktree and cannot switch the repository's main checkout. It runs in auto mode with ccorch's deny rules, and `tmux` is denied, so it starts no panes.
+- **Set by the wrapper, not asked for in text.** The pane runs `claude --worktree <name>` in the target repository, so it starts in a new worktree on its own branch instead of the main checkout. That sets where it starts; it does not stop a later `git -C <main checkout> ...` (the system prompt and the auto-mode classifier are what stand against that). It runs in auto mode with ccorch's deny rules, including the usual forms of `tmux`, so it does not start panes the usual way.
 - **Written in the cover note.** Everything else: the repository's rules, where working files go, what to return, what to do when stopped. A ban written in text does not hold on its own: a pane told not to use `rm` still ran `rm -rf` and stopped at the ask rule. When something must not happen, rely on a deny rule, a hook or the worktree, and use the cover note to say what to do instead.
+
+No real job pane has been run yet (see `docs/sdd/design/decisions/DEC-007.md`). Watch the first ones in their pane.
 
 ## Steps
 
@@ -28,7 +30,8 @@ Otherwise, stop and suggest a subagent (or the current session): a pane costs a 
 
 Also check:
 
-- tmux is reachable (`tmux list-sessions`). The session may be outside tmux (a background job has no `$TMUX`); the launcher then adds the window to a session tmux picks.
+- tmux 3.0 or later is reachable (`tmux -V`, `tmux list-sessions`). The session may be outside tmux (a background job has no `$TMUX`); the launcher then adds the window to a session tmux picks.
+- Whether the target repository ignores `.claude/tmp/` (`git -C <repository> check-ignore -q .claude/tmp/x` exits 0 when it does). If it does not, say so in the cover note's "Working files" section.
 - The target is the top directory of a git repository. Claude Code creates the worktree from it; where the new branch starts follows Claude Code's `worktree.baseRef` setting for that repository (with `head`, the main checkout's current commit), so check that the main checkout is where the work should start.
 
 ### 2. Write the content
@@ -59,6 +62,8 @@ Write the cover note and the content to one file outside the target repository (
 ## Working files
 - Put temporary files in `.claude/tmp/` inside the worktree. Leave them there; do not delete them
   (an ask rule on `rm` stops the pane). The caller cleans up.
+- Never commit them: add the files you changed by name, not with `git add -A` or `git add .`.
+  <if the repository does not ignore `.claude/tmp/`, say so here>.
 
 ## What to return
 - Write the result file in the format your instructions give (Summary, Evidence, Not tested,
@@ -76,20 +81,23 @@ Write the cover note and the content to one file outside the target repository (
 
 ### 4. Start the pane
 
-Pick a worktree name for the task (letters, digits, `.`, `_`, `-`; for example `fix-gates-file`). Then run, as one command:
+First find the scripts directory, once: `${CLAUDE_PLUGIN_ROOT}/scripts` when `CLAUDE_PLUGIN_ROOT` is set; otherwise the "Base directory for this skill" shown when this skill loaded, followed by `/../../scripts`. Write it as an absolute path in the commands below.
+
+Pick a worktree name for the task (letters, digits, `.`, `_`, `-`, not starting with `.` or `-`, no `..`, at most 64 characters; for example `fix-gates-file`). Then run, as one command:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/ccorch-job.sh" <repository> <worktree name> <task file> [timeout seconds]
+bash <scripts>/ccorch-job.sh <repository> <worktree name> <task file> [timeout seconds]
 ```
 
-If `CLAUDE_PLUGIN_ROOT` is not set, the script is at `../../scripts/ccorch-job.sh` from this skill's directory. The timeout defaults to 3600 seconds. The script prints `work_dir=`, `channel=` and `pane=`; keep them.
-
-The wrapper's start gate may refuse the pane (a bad worktree name, the pane limit); the refusal arrives as the result, with `status: refused` and the reason.
+- The timeout is the fourth argument, default 3600 seconds. `CCORCH_TIMEOUT` in your environment is not read; `CCORCH_MAX_PANES` is passed on when set.
+- The script prints `work_dir=`, `channel=` and `pane=`; keep them.
+- It exits 2 without starting anything when an input is wrong: a bad worktree name, a worktree of that name already in `<repository>/.claude/worktrees/`, a repository path with `#`, a task over 100000 bytes, tmux older than 3.0. Fix the input; do not work around the check.
+- Exit 0 means tmux opened the window, not that the job runs. The wrapper's start gate may still refuse it (the pane limit, for example); the window then closes at once and the refusal reason is in the result, with `status: refused`. Always wait for and read the result.
 
 ### 5. Wait in the background
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/ccorch-wait.sh" <work_dir> <channel>
+bash <scripts>/ccorch-wait.sh <work_dir> <channel>
 ```
 
 Run it with `run_in_background: true` and keep working. It prints `result=<path>` when the result exists. While you wait:
@@ -110,7 +118,8 @@ Read the result file and `<work_dir>/status.md`. Tell the user:
 Ask before each of these:
 
 - Close the pane: `tmux kill-pane -t <pane>`. The session stays in Claude Code's session list.
-- Remove the worktree and branch after the PR is merged, from the target repository, without `--force`. Move anything you want to keep out of `.claude/tmp/` first: `git worktree remove` deletes ignored files without asking.
+- Remove the worktree and branch after the PR is merged. Find them with `git -C <repository> worktree list` (the worktree is under `<repository>/.claude/worktrees/<name>`), then `git -C <repository> worktree remove <path>` and `git -C <repository> branch -d <branch>`, never with `--force` or `-D`. Move anything you want to keep out of `.claude/tmp/` first: `git worktree remove` deletes ignored files without asking, and refuses while untracked files are there; then show the user the files and ask.
+- The work directory (`work_dir=`) holds the task copy and the result files. Delete it after you have reported, if the user agrees.
 
 ## Related
 

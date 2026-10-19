@@ -14,8 +14,10 @@ Earlier versions: see the git history.
   wrong: one said "make a branch" and the pane switched the repository's main checkout; one said
   "do not use `rm`" and the pane stopped at an ask rule on `rm -rf`.
 - **Job mode in the wrapper**: `CCORCH_MODE=job` with `CCORCH_WORKTREE=<name>` starts
-  `claude --worktree <name>`, so the place of work is set by the wrapper, not by the request
-  text. A job denies `Bash(tmux *)` (no panes) and keeps the Agent tool and `git push`. Its
+  `claude --worktree <name>`, so the pane starts in a new worktree, set by the wrapper, not by
+  the request text (a later command aimed at the main checkout is left to the system prompt and
+  the auto-mode classifier). A job denies the usual forms of `tmux` (`Bash(tmux *)`, not a
+  boundary) and keeps the Agent tool and `git push`, asked to push only its own branch. Its
   system prompt has a "Single job" section and a five-section result format (Summary,
   Evidence, Not tested, Branch and PR, Left behind). The start gate refuses a job at depth 2
   or 3, with a parent, without a worktree name or with a name outside
@@ -23,16 +25,28 @@ Earlier versions: see the git history.
   Without `CCORCH_MODE`, the claude argv and system prompt are unchanged byte for byte.
 - `scripts/ccorch-job.sh` starts a job pane. It passes the command to tmux as separate
   arguments, so no shell parses the task text or paths, and the pane's program is still the
-  wrapper. Default timeout 3600 s.
+  wrapper. Default timeout 3600 s (the fourth argument; `CCORCH_TIMEOUT` is not read). Before
+  tmux runs it refuses a bad worktree name, a worktree directory that already exists, a
+  repository path with `#` (tmux formats), a task over 100000 bytes and tmux older than 3.0.
+  The window name is fixed, and the work directory is a fresh `mktemp -d` readable by the user
+  only.
 - `scripts/ccorch-wait.sh`: `/ccor`'s wait loop as one command, for sessions that refuse
   loops (a session isolated in a worktree).
-- `tests/test_job.sh` (54 checks) and job-mode cases in `tests/test_wrapper.sh` (378 checks in all).
+- `tests/test_job.sh` (81 checks) and job-mode cases in `tests/test_wrapper.sh` (382 checks in all).
+
+### Fixed
+
+- The wrapper delivers the task through a tmux buffer named after the pane, deleted on paste.
+  With the unnamed buffer, two panes starting within the same 3 s could paste each other's
+  task. This applies to `/ccor` panes as well.
+- A `#` in the task text is written as `##` in the pane title, so tmux does not read it as a
+  format.
 
 ### Not checked live
 
 A real job pane has not been run yet: `claude --worktree` together with
-`--append-system-prompt` and the pasted task, where the new branch starts, and the pane writing
-its result file from inside the worktree.
+`--append-system-prompt` and the task passed as its argument, where the new branch starts, and
+the pane writing its result file from inside the worktree.
 
 ## 0.6.3 — 2026-10-05
 

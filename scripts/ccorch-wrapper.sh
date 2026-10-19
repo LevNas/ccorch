@@ -495,6 +495,8 @@ release_lock
 if [ -z "$DRY_RUN" ]; then
   TASK_SHORT="${TASK:0:40}"
   TASK_SHORT="${TASK_SHORT//$'\n'/ }"
+  # tmux expands formats in a pane title (#{...}, #(...)): a literal # is written ##.
+  TASK_SHORT="${TASK_SHORT//#/##}"
   case "$DEPTH" in
     1) PANE_TITLE="[Main] ${TASK_SHORT}"
        [ "$MODE" != job ] || PANE_TITLE="[Job] ${TASK_SHORT}" ;;
@@ -576,7 +578,8 @@ if [ "$MODE" = job ]; then
 You were started by /ccorch:job to do one task yourself. Do not split it into panes: the usual forms of \`tmux\` commands are denied for you, and you must not start panes or other Claude sessions by any route. Subagents (the Agent tool) are allowed inside this session.
 
 ## Where you work
-This session was started with \`claude --worktree ${WORKTREE_NAME}\` in ${PROJECT_DIR}, so it runs in a git worktree of that repository, on a branch of its own. Edit, commit and run commands inside that worktree only. Do not check out branches in, or write to, the repository's main checkout (${PROJECT_DIR}) or any other worktree. If the task asks for that, stop and say so in your result file.
+This session was started with \`claude --worktree ${WORKTREE_NAME}\` in ${PROJECT_DIR}, so it starts in a git worktree of that repository, on a branch of its own. Edit, commit and run commands inside that worktree only. Do not check out branches in, or write to, the repository's main checkout (${PROJECT_DIR}) or any other worktree: nothing but this rule and the auto-mode classifier stops you, so it is yours to keep. If the task asks for that, stop and say so in your result file.
+Push only your worktree's own branch, never the default branch or another branch. Commit the files you changed by name; do not commit working files (for example \`.claude/tmp/\`).
 
 ## The task text
 The task text is a cover note followed by the content. The cover note says where you work, the target repository's rules, where working files go, what to return and what to do when you are stopped. The content points to issues and files instead of repeating them: read them there. If the cover note and these instructions disagree, follow these instructions and say so in your result file.
@@ -923,9 +926,11 @@ WATCHDOG_PID=$!
 # Schedule task delivery after Claude TUI initializes
 (
   sleep 3
-  # Use load-buffer + paste-buffer for safe delivery of arbitrary text
-  tmux load-buffer "$TASK_FILE"
-  tmux paste-buffer -t "$CURRENT_PANE"
+  # Use load-buffer + paste-buffer for safe delivery of arbitrary text. The buffer is named
+  # after this pane and deleted by the paste (-d): with the unnamed buffer, two panes starting
+  # within these 3 s could paste each other's task.
+  tmux load-buffer -b "ccorch-${CHILD_ID}" "$TASK_FILE"
+  tmux paste-buffer -d -b "ccorch-${CHILD_ID}" -t "$CURRENT_PANE"
   sleep 0.5
   tmux send-keys -t "$CURRENT_PANE" Enter
 ) &
